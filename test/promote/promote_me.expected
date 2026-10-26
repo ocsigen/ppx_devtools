@@ -27,4 +27,4 @@ let%expect_test "empty" =
   print_string "actual";
   [%expect {| actual |}]
 
-let () = Ppx_expect_light_runtime.exit ()
+let () = Ppx_devtools_expect_runtime.exit ()
