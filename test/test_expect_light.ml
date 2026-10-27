@@ -115,6 +115,57 @@ let%expect_test "gated constructors" =
     Flags.all;
   [%expect {| AC |}]
 
+(* Gated signature items, exceptions, module types and or-patterns. *)
+module Items : sig
+  val kept : int
+
+  val gone : int [@@if ocaml_version < (4, 0, 0)]
+
+  external gone_external : int -> int = "%identity" [@@if ocaml_version < (4, 0, 0)]
+
+  exception Kept
+
+  exception Gone [@@if ocaml_version < (4, 0, 0)]
+
+  module type Gone = sig end [@@if ocaml_version < (4, 0, 0)]
+
+  val classify : int -> string
+
+  [@@@if ocaml_version < (4, 0, 0)]
+
+  val gone_floating : int
+end = struct
+  let kept = 1
+
+  exception Kept
+
+  exception Gone [@@if ocaml_version < (4, 0, 0)]
+
+  exception Gone of int [@if ocaml_version < (4, 0, 0)]
+
+  module type Gone = sig
+    val missing : int
+  end
+  [@@if ocaml_version < (4, 0, 0)]
+
+  module type Gone = sig end [@@if ocaml_version >= (4, 0, 0)]
+
+  [@@@if ocaml_version >= (4, 0, 0)]
+
+  let classify = function
+    | (1 | 2) [@if ocaml_version < (4, 0, 0)] -> "gated"
+    | 1 | 2 -> "small"
+    | _ -> "other"
+
+  [@@@if ocaml_version < (4, 0, 0)]
+
+  let kept = "not an int"
+end
+
+let%expect_test "gated items" =
+  Printf.printf "%d %s %s" Items.kept (Items.classify 1) (Items.classify 3);
+  [%expect {| 1 small other |}]
+
 let%expect_test "extension axes" =
   print_string "extended";
   [%expect ({| boolean axis |} [@when disabled])];

@@ -1,0 +1,2 @@
+File "local_binding.ml", line 2, characters 12-44:
+Error: [@if] is not supported here
