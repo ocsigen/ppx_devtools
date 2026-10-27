@@ -27,4 +27,23 @@ let%expect_test "empty" =
   print_string "actual";
   [%expect {| actual |}]
 
+let%expect_test "no default variant" =
+  print_string "actual";
+  [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
+  [%expect {| actual |}]
+
+let%expect_test "trailing output" =
+  print_string "checked";
+  [%expect {| checked |}];
+  print_string "line 1\nline 2";
+  [%expect {|
+           line 1
+           line 2
+           |}]
+
+let%expect_test "trailing output, after a let" =
+  let s = "trailing" in
+  print_string s;
+  [%expect {| trailing |}]
+
 let () = Ppx_devtools_expect_runtime.exit ()
