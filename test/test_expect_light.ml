@@ -96,7 +96,9 @@ end = struct
 
   type e += E3 [@if ocaml_version < (4, 0, 0)]
 
-  let _ = function
+  let _ =
+   fun x ->
+    match x with
     | E1 -> ()
     | (E2 [@if ocaml_version < (4, 0, 0)]) -> ()
     | _ -> ()
