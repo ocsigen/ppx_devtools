@@ -60,6 +60,59 @@ let%expect_test "gated patterns" =
   Printf.printf "%s %s %s %s" (f 1) (f 2) (g 1) (g 2);
   [%expect {| one other one other |}]
 
+(* Gated variant constructors and type declarations. *)
+module Flags : sig
+  type t =
+    | A
+    | B [@if ocaml_version < (4, 0, 0)]
+    | C
+
+  type gone = int [@@if ocaml_version < (4, 0, 0)]
+
+  type e = ..
+
+  type e += E1 | E2 [@if ocaml_version < (4, 0, 0)]
+
+  type e += E3 [@if ocaml_version < (4, 0, 0)]
+
+  val all : t list
+end = struct
+  type t =
+    | A
+    | B [@if ocaml_version < (4, 0, 0)]
+    | C
+
+  type gone = int [@@if ocaml_version < (4, 0, 0)]
+
+  type gone = string [@@if ocaml_version >= (4, 0, 0)]
+
+  let _ : gone = "kept"
+
+  let all = [ A; C ]
+
+  type e = ..
+
+  type e += E1 | E2 [@if ocaml_version < (4, 0, 0)]
+
+  type e += E3 [@if ocaml_version < (4, 0, 0)]
+
+  let _ = function
+    | E1 -> ()
+    | (E2 [@if ocaml_version < (4, 0, 0)]) -> ()
+    | _ -> ()
+end
+
+let%expect_test "gated constructors" =
+  List.iter
+    (fun (x : Flags.t) ->
+      print_string
+        (match x with
+        | A -> "A"
+        | (B [@if ocaml_version < (4, 0, 0)]) -> "B"
+        | C -> "C"))
+    Flags.all;
+  [%expect {| AC |}]
+
 let%expect_test "extension axes" =
   print_string "extended";
   [%expect ({| boolean axis |} [@when disabled])];

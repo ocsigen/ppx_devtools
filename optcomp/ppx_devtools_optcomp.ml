@@ -30,6 +30,9 @@
     {!Ppx_devtools_predicate.Predicate}). They can be placed
     on module (Pstr_module),
     toplevel bindings (Pstr_value, Pstr_primitive)
+    type declarations (Pstr_type, Psig_type)
+    variant constructors (pcd_attributes)
+    and extension constructors (pext_attributes)
     toplevel extensions, e.g. [let%expect_test "..." = ... [@@if ...]]
     (Pstr_extension)
     pattern in case (pc_lhs)
@@ -152,6 +155,9 @@ let truncate_floating_str items =
   in
   loop items
 
+let filter_type_declarations l =
+  filter_map l ~f:(fun d -> if keep d.ptype_loc d.ptype_attributes then Some d else None)
+
 exception Drop_case
 
 let traverse =
@@ -192,6 +198,11 @@ let traverse =
           match l with
           | [] -> drop_str Location.none
           | _ -> { item with pstr_desc = Pstr_value (r, l) })
+      | Pstr_type (r, l) -> (
+          match filter_type_declarations l with
+          | [] -> drop_str item.pstr_loc
+          | l -> { item with pstr_desc = Pstr_type (r, l) })
+      | Pstr_typext { ptyext_constructors = []; _ } -> drop_str item.pstr_loc
       | _ -> item
 
     (* Match cases are not always traversed through [cases]: with OxCaml's
@@ -210,11 +221,32 @@ let traverse =
       | None -> raise Drop_case
       | Some pattern -> super#case { case with pc_lhs = pattern }
 
+    method! type_kind kind =
+      match super#type_kind kind with
+      | Ptype_variant l ->
+          Ptype_variant
+            (filter_map l ~f:(fun c ->
+                 if keep c.pcd_loc c.pcd_attributes then Some c else None))
+      | kind -> kind
+
+    method! type_extension ext =
+      let ext = super#type_extension ext in
+      { ext with
+        ptyext_constructors =
+          filter_map ext.ptyext_constructors ~f:(fun c ->
+              if keep c.pext_loc c.pext_attributes then Some c else None)
+      }
+
     method! signature_item item =
       let item = super#signature_item item in
       match item.psig_desc with
       | Psig_module { pmd_attributes; pmd_loc; _ } ->
           if keep pmd_loc pmd_attributes then item else drop_sig pmd_loc
+      | Psig_type (r, l) -> (
+          match filter_type_declarations l with
+          | [] -> drop_sig item.psig_loc
+          | l -> { item with psig_desc = Psig_type (r, l) })
+      | Psig_typext { ptyext_constructors = []; _ } -> drop_sig item.psig_loc
       | _ -> item
   end
 

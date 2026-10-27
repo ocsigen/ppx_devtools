@@ -30,9 +30,20 @@ let input_all ic = really_input_string ic (in_channel_length ic)
 [@@if ocaml_version < (5, 1, 0)]
 ```
 
-`[@if]` can be placed on toplevel bindings, externals, modules (also in
-signatures), toplevel extension nodes such as `let%expect_test`, and the
-patterns of match cases. A floating `[@@@if COND]` removes all the items that
+`[@if]` can be placed on toplevel bindings, externals, modules and type
+declarations (also in signatures), variant and extension constructors,
+toplevel extension nodes such as `let%expect_test`, and the patterns of match
+cases:
+
+```ocaml
+type open_flag =
+  | O_RDONLY
+  | O_NOFOLLOW [@if os_type = "Unix"]
+
+let to_string = function
+  | O_RDONLY -> "O_RDONLY"
+  | O_NOFOLLOW [@if os_type = "Unix"] -> "O_NOFOLLOW"
+``` A floating `[@@@if COND]` removes all the items that
 follow it in the file when `COND` is false.
 
 The available atoms are:
