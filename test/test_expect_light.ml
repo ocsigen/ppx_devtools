@@ -44,6 +44,22 @@ let%expect_test "gated away" =
   [%expect {| deliberately wrong |}]
 [@@if ocaml_version < (4, 0, 0)]
 
+(* Gated patterns, in the cases of a match and of a function. *)
+let%expect_test "gated patterns" =
+  let f x =
+    match x with
+    | (1 [@if ocaml_version < (4, 0, 0)]) -> "gated"
+    | 1 | (2 [@if ocaml_version < (4, 0, 0)]) -> "one"
+    | _ -> "other"
+  in
+  let g = function
+    | (1 [@if ocaml_version < (4, 0, 0)]) -> "gated"
+    | 1 | (2 [@if ocaml_version < (4, 0, 0)]) -> "one"
+    | _ -> "other"
+  in
+  Printf.printf "%s %s %s %s" (f 1) (f 2) (g 1) (g 2);
+  [%expect {| one other one other |}]
+
 let%expect_test "extension axes" =
   print_string "extended";
   [%expect ({| boolean axis |} [@when disabled])];

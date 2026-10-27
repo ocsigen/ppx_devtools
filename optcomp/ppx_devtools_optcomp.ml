@@ -152,6 +152,8 @@ let truncate_floating_str items =
   in
   loop items
 
+exception Drop_case
+
 let traverse =
   object (self)
     inherit Ppxlib.Ast_traverse.map as super
@@ -192,14 +194,21 @@ let traverse =
           | _ -> { item with pstr_desc = Pstr_value (r, l) })
       | _ -> item
 
-    method! cases cases =
-      let cases =
-        filter_map cases ~f:(fun case ->
-            match filter_pattern case.pc_lhs with
-            | None -> None
-            | Some pattern -> Some { case with pc_lhs = pattern })
-      in
-      super#cases cases
+    (* Match cases are not always traversed through [cases]: with OxCaml's
+       ppxlib, the cases of a [function] are mapped with [self#list
+       self#case]. So [case] raises [Drop_case] when its pattern is gated
+       out, and [list] removes the corresponding element. *)
+    method! list : 'a. ('a -> 'a) -> 'a list -> 'a list =
+      fun f l ->
+        filter_map l ~f:(fun x ->
+            match f x with
+            | x -> Some x
+            | exception Drop_case -> None)
+
+    method! case case =
+      match filter_pattern case.pc_lhs with
+      | None -> raise Drop_case
+      | Some pattern -> super#case { case with pc_lhs = pattern }
 
     method! signature_item item =
       let item = super#signature_item item in
