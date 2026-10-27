@@ -3,6 +3,7 @@
 
 (executable
  (name promote_me)
+ (modules promote_me)
  (preprocess
   (pps ppx_devtools-expect)))
 
@@ -42,3 +43,35 @@
      missing
      -diff-cmd
      -)))))
+
+; An [%expect] that runs several times with different outputs makes the
+; runner fail, even when it leaves promotion to dune.
+
+(executable
+ (name disagree)
+ (modules disagree)
+ (preprocess
+  (pps ppx_devtools-expect)))
+
+(rule
+ (targets disagree.output)
+ (deps disagree.ml)
+ (action
+  (chdir
+   %{workspace_root}
+   (with-accepted-exit-codes
+    2
+    (with-stderr-to
+     %{targets}
+     (run
+      %{exe:disagree.exe}
+      inline-test-runner
+      -source-tree-root
+      .
+      -diff-cmd
+      -))))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff disagree.expected disagree.output)))

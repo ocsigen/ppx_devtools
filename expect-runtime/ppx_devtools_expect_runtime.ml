@@ -67,6 +67,9 @@ type variant =
   { condition : unit -> bool
   ; is_default : bool
   ; expected : string
+  ; line : int
+  ; expect_start : int
+  ; expect_end : int
   ; payload_start : int
   ; payload_end : int
   }
@@ -81,6 +84,8 @@ type test =
   ; tags : string list
   ; condition : unit -> bool (* reified [@when] on the test; gates running *)
   ; expectations : variant array array
+  ; body_end : int
+  ; last_statement_start : int
   ; body : unit -> unit
   }
 
@@ -96,6 +101,8 @@ let register_test
     ~tags
     ~condition
     ~expectations
+    ~body_end
+    ~last_statement_start
     body =
   tests :=
     { lib
@@ -107,6 +114,8 @@ let register_test
     ; tags
     ; condition
     ; expectations
+    ; body_end
+    ; last_statement_start
     ; body
     }
     :: !tests
@@ -118,14 +127,17 @@ type run =
   ; expectations : variant array array
   ; filename : string
   ; description : string
+  ; seen : (int, string) Hashtbl.t (* output of the first run of each assertion point *)
+  ; mutable disagreeing : int list (* assertion points already reported *)
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
+  ; mutable errors : string list (* failures, even when promoting *)
   }
 
 let current : run option ref = ref None
 
 (* Pick the active variant of a group: the first conditional variant whose
-   predicate holds, otherwise the default one (a plain [%expect]). *)
+   predicate holds, otherwise the default one (a plain [%expect]), if any. *)
 let select_variant group =
   let n = Array.length group in
   let rec find i =
@@ -136,16 +148,57 @@ let select_variant group =
       if (not v.is_default) && v.condition () then Some v else find (i + 1)
   in
   match find 0 with
-  | Some v -> v
+  | Some v -> Some v
   | None ->
       let rec find_default i =
         if i >= n
-        then group.(0)
+        then None
         else if group.(i).is_default
-        then group.(i)
+        then Some group.(i)
         else find_default (i + 1)
       in
       find_default 0
+
+let mismatch r ~expected ~actual correction =
+  r.corrections <- correction :: r.corrections;
+  r.reports <- Diff.make ~description:r.description ~expected ~actual :: r.reports
+
+(* Output that no [%expect] accounts for is expected to be empty. On a
+   mismatch, a new [%expect] is inserted at [pos]. *)
+let check_unexpected r ~pos ~indent_pos actual =
+  if not (String.equal (Text.normalize actual) "")
+  then
+    mismatch
+      r
+      ~expected:""
+      ~actual
+      { Corrected.filename = r.filename
+      ; payload_start = pos
+      ; payload_end = pos
+      ; actual
+      ; kind = New_expect { indent_pos }
+      }
+
+let check_group r group actual =
+  match select_variant group with
+  | Some v ->
+      if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
+      then
+        mismatch
+          r
+          ~expected:v.expected
+          ~actual
+          { Corrected.filename = r.filename
+          ; payload_start = v.payload_start
+          ; payload_end = v.payload_end
+          ; actual
+          ; kind = Literal
+          }
+  | None ->
+      (* No default variant, and no condition holds: insert a default
+         [%expect] after the last variant of the group. *)
+      let last = group.(Array.length group - 1) in
+      check_unexpected r ~pos:last.expect_end ~indent_pos:last.expect_start actual
 
 let check ~index =
   match !current with
@@ -156,22 +209,32 @@ let check ~index =
       then begin
         let group = r.expectations.(index) in
         if Array.length group > 0
-        then begin
-          let v = select_variant group in
-          if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
-          then begin
-            r.corrections <-
-              { Corrected.filename = r.filename
-              ; payload_start = v.payload_start
-              ; payload_end = v.payload_end
-              ; actual
-              }
-              :: r.corrections;
-            r.reports <-
-              Diff.make ~description:r.description ~expected:v.expected ~actual
-              :: r.reports
-          end
-        end
+        then
+          match Hashtbl.find_opt r.seen index with
+          | None ->
+              Hashtbl.add r.seen index actual;
+              check_group r group actual
+          | Some first ->
+              (* The assertion point runs again (e.g. in a loop): its output
+                 must not change, as a single snapshot cannot record both. *)
+              if
+                (not (String.equal (Text.normalize first) (Text.normalize actual)))
+                && not (List.mem index r.disagreeing)
+              then begin
+                r.disagreeing <- index :: r.disagreeing;
+                r.errors <-
+                  Diff.make
+                    ~description:
+                      (Printf.sprintf
+                         "%s\n\
+                         \  the [%%expect] at line %d ran several times with different \
+                          outputs:"
+                         r.description
+                         group.(0).line)
+                    ~expected:first
+                    ~actual
+                  :: r.errors
+              end
       end
 
 let read_output () =
@@ -463,8 +526,11 @@ let exit () =
           ; expectations = test.expectations
           ; filename = test.filename
           ; description = descr
+          ; seen = Hashtbl.create 8
+          ; disagreeing = []
           ; corrections = []
           ; reports = []
+          ; errors = []
           }
         in
         current := Some r;
@@ -475,6 +541,15 @@ let exit () =
           | exception e -> Some (e, Printexc.get_backtrace ())
         in
         let elapsed = Sys.time () -. t0 in
+        (* Output printed after the last assertion point: when the test
+           completes, it gets a new [%expect] at the end of the body. *)
+        if Option.is_none exn
+        then
+          check_unexpected
+            r
+            ~pos:test.body_end
+            ~indent_pos:test.last_statement_start
+            (Capture.read cap);
         current := None;
         Capture.stop cap;
         if cfg.verbose then Printf.printf " (%.3f sec)\n%!" elapsed;
@@ -484,16 +559,17 @@ let exit () =
             incr mismatches;
             all_corrections := List.rev_append corrections !all_corrections;
             if not dune_mode then List.iter report (List.rev r.reports));
-        match exn with
+        List.iter report (List.rev r.errors);
+        (match exn with
         | None -> ()
         | Some (e, bt) ->
-            incr errors;
             report
               (Printf.sprintf
                  "FAILED: %s\n  exception: %s\n%s\n"
                  descr
                  (Printexc.to_string e)
-                 bt)
+                 bt));
+        if Option.is_some exn || r.errors <> [] then incr errors
       end)
     (List.rev !tests);
   (match List.rev !delayed with

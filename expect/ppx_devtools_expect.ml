@@ -47,6 +47,9 @@ type variant =
   { is_default : bool
   ; condition : expression option (* reified [@when] predicate, [bool]-valued *)
   ; expected : string
+  ; line : int
+  ; expect_start : int
+  ; expect_end : int
   ; payload_start : int
   ; payload_end : int
   }
@@ -111,6 +114,9 @@ let when_condition ~expr_attrs ~eval_attrs =
 
 (* Parse the payload of an [%expect ...] node into a {!variant}. *)
 let variant_of_payload ~ext_loc (payload : payload) : variant =
+  let line = ext_loc.loc_start.pos_lnum in
+  let expect_start = ext_loc.loc_start.pos_cnum in
+  let expect_end = ext_loc.loc_end.pos_cnum in
   match payload with
   | PStr [] ->
       (* Bare [%expect]: no literal yet. Promotion will insert one just before
@@ -119,6 +125,9 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
       { is_default = true
       ; condition = None
       ; expected = ""
+      ; line
+      ; expect_start
+      ; expect_end
       ; payload_start = p
       ; payload_end = p
       }
@@ -138,6 +147,9 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
           { is_default = Option.is_none condition
           ; condition
           ; expected = s
+          ; line
+          ; expect_start
+          ; expect_end
           ; payload_start = str_loc.loc_start.pos_cnum - delim_len
           ; payload_end = str_loc.loc_end.pos_cnum + delim_len
           }
@@ -247,6 +259,9 @@ let evariant ~loc (v : variant) : expression =
     { Ppx_devtools_expect_runtime.condition = [%e condition]
     ; is_default = [%e Ast_builder.Default.ebool ~loc v.is_default]
     ; expected = [%e estring ~loc v.expected]
+    ; line = [%e Ast_builder.Default.eint ~loc v.line]
+    ; expect_start = [%e Ast_builder.Default.eint ~loc v.expect_start]
+    ; expect_end = [%e Ast_builder.Default.eint ~loc v.expect_end]
     ; payload_start = [%e Ast_builder.Default.eint ~loc v.payload_start]
     ; payload_end = [%e Ast_builder.Default.eint ~loc v.payload_end]
     }]
@@ -338,6 +353,15 @@ let expand_test ~loc (vb : value_binding) : structure_item =
      so the [-verbose] location reads identically. *)
   let start_pos = pos.pos_cnum - pos.pos_bol in
   let end_pos = vb.pvb_loc.loc_end.pos_cnum - pos.pos_bol in
+  let body_end = vb.pvb_expr.pexp_loc.loc_end.pos_cnum in
+  let last_statement_start =
+    let rec last (e : expression) =
+      match e.pexp_desc with
+      | Pexp_sequence (_, e) -> last e
+      | _ -> e
+    in
+    (last vb.pvb_expr).pexp_loc.loc_start.pos_cnum
+  in
   let body, groups = transform_body vb.pvb_expr in
   let expectations = eexpectations ~loc groups in
   let tags = Ast_builder.Default.elist ~loc (List.map tags ~f:(estring ~loc)) in
@@ -358,6 +382,8 @@ let expand_test ~loc (vb : value_binding) : structure_item =
         ~tags:[%e tags]
         ~condition:[%e condition]
         ~expectations:[%e expectations]
+        ~body_end:[%e Ast_builder.Default.eint ~loc body_end]
+        ~last_statement_start:[%e Ast_builder.Default.eint ~loc last_statement_start]
         (fun () -> [%e body])]
 
 let impl_mapper =

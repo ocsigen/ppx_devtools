@@ -55,6 +55,9 @@ type variant =
   { condition : unit -> bool (* reified [%expect.when] predicate *)
   ; is_default : bool (* [true] for a plain [%expect] with no [.when] *)
   ; expected : string (* contents of the [{| ... |}] literal *)
+  ; line : int (* line of the [%expect] in the source *)
+  ; expect_start : int (* byte offset of the [%expect] node in the source *)
+  ; expect_end : int (* byte offset just past the [%expect] node *)
   ; payload_start : int (* byte offset of the literal token in the source *)
   ; payload_end : int (* byte offset just past the literal token *)
   }
@@ -70,12 +73,17 @@ val register_test :
   -> tags:string list
   -> condition:(unit -> bool)
   -> expectations:variant array array
+  -> body_end:int
+  -> last_statement_start:int
   -> (unit -> unit)
   -> unit
 (** Register an [let%expect_test]. [lib] is the library the test belongs to (so
     the runner can ignore tests from dependencies linked into it). [expectations]
     holds one group of [variant]s per assertion point (in source order);
-    [check ~index:k] refers to group [k]. *)
+    [check ~index:k] refers to group [k]. [body_end] is the byte offset of
+    the end of the test body, and [last_statement_start] the one of the start
+    of its last statement: output printed after the last assertion point gets
+    a new [%expect] there. *)
 
 val check : index:int -> unit
 (** Called at each [%expect]/[%expect.when] point: compares the output captured

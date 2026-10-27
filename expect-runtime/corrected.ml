@@ -14,14 +14,23 @@
 
 (* Produces the [<source>.corrected] files that dune diffs against the sources
    for promotion. Only the literal of the variant that actually mismatched is
-   rewritten; every other byte of the source (including the non-matching
-   [%expect.when] variants) is copied verbatim. *)
+   rewritten, or a new [%expect] inserted; every other byte of the source
+   (including the non-matching [%expect.when] variants) is copied verbatim. *)
+
+type kind =
+  (* Replace the literal in [payload_start, payload_end). A bare [%expect]
+     has an empty span, and gets a literal inserted. *)
+  | Literal
+  (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
+     like the line holding [indent_pos]. *)
+  | New_expect of { indent_pos : int }
 
 type correction =
   { filename : string (* relative to the build context root (see [write]) *)
   ; payload_start : int (* byte offset of the start of the string literal token *)
   ; payload_end : int (* byte offset just past the literal token *)
   ; actual : string
+  ; kind : kind
   }
 
 let contains s sub =
@@ -41,13 +50,20 @@ let column_of source pos =
   in
   pos - line_start pos
 
+let indentation_of source pos =
+  let start = pos - column_of source pos in
+  let rec loop i =
+    if i < String.length source && Char.equal source.[i] ' ' then loop (i + 1) else i
+  in
+  loop start - start
+
 (* Pick the shortest [{tag| ... |tag}] delimiter that does not clash with the
    body. [tag = ""] gives the usual [{| ... |}]. *)
 let rec choose_tag body n =
   let tag = String.make n '_' in
   if contains body ("|" ^ tag ^ "}") then choose_tag body (n + 1) else tag
 
-let render_literal ~source ~payload_start ~actual =
+let render_literal ~column ~actual =
   let lines = Text.canonical_lines actual in
   let body = String.concat "\n" lines in
   let tag = choose_tag body 0 in
@@ -56,7 +72,7 @@ let render_literal ~source ~payload_start ~actual =
   | [] -> opening ^ " " ^ closing
   | [ single ] -> Printf.sprintf "%s %s %s" opening single closing
   | _ ->
-      let indent = String.make (column_of source payload_start) ' ' in
+      let indent = String.make column ' ' in
       let body =
         String.concat
           ""
@@ -108,13 +124,27 @@ let write ~root corrections =
             List.map
               (fun c ->
                 let literal =
-                  render_literal ~source ~payload_start:c.payload_start ~actual:c.actual
-                in
-                (* A bare [%expect] has no literal to replace (the span is
-                   empty); the literal is inserted, so add the leading space
-                   that a written-out [%expect {| ... |}] would have. *)
-                let literal =
-                  if c.payload_start = c.payload_end then " " ^ literal else literal
+                  match c.kind with
+                  | Literal ->
+                      let literal =
+                        render_literal
+                          ~column:(column_of source c.payload_start)
+                          ~actual:c.actual
+                      in
+                      (* A bare [%expect] has no literal to replace (the span
+                         is empty); the literal is inserted, so add the leading
+                         space that a written-out [%expect {| ... |}] would
+                         have. *)
+                      if c.payload_start = c.payload_end then " " ^ literal else literal
+                  | New_expect { indent_pos } ->
+                      let indent = indentation_of source indent_pos in
+                      let opening = "[%expect " in
+                      let literal =
+                        render_literal
+                          ~column:(indent + String.length opening)
+                          ~actual:c.actual
+                      in
+                      Printf.sprintf ";\n%s%s%s]" (String.make indent ' ') opening literal
                 in
                 c.payload_start, c.payload_end, literal)
               cs
