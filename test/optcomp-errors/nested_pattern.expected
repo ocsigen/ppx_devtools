@@ -1,0 +1,2 @@
+File "nested_pattern.ml", line 2, characters 12-43:
+Error: [@if] is not supported here

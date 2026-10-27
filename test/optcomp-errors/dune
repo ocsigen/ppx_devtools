@@ -1,0 +1,97 @@
+; [@if] in a position that is not supported is an error, rather than being
+; silently ignored.
+
+(executable
+ (name pp)
+ (modules pp)
+ (libraries ppx_devtools-optcomp ppxlib))
+
+(rule
+ (targets expression.output)
+ (deps expression.ml)
+ (action
+  (with-accepted-exit-codes
+   1
+   (setenv
+    OCAML_ERROR_STYLE
+    short
+    (with-outputs-to
+     %{targets}
+     (run ./pp.exe -impl expression.ml -o %{null}))))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff expression.expected expression.output)))
+
+(rule
+ (targets local_binding.output)
+ (deps local_binding.ml)
+ (action
+  (with-accepted-exit-codes
+   1
+   (setenv
+    OCAML_ERROR_STYLE
+    short
+    (with-outputs-to
+     %{targets}
+     (run ./pp.exe -impl local_binding.ml -o %{null}))))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff local_binding.expected local_binding.output)))
+
+(rule
+ (targets class.output)
+ (deps class.ml)
+ (action
+  (with-accepted-exit-codes
+   1
+   (setenv
+    OCAML_ERROR_STYLE
+    short
+    (with-outputs-to
+     %{targets}
+     (run ./pp.exe -impl class.ml -o %{null}))))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff class.expected class.output)))
+
+(rule
+ (targets nested_pattern.output)
+ (deps nested_pattern.ml)
+ (action
+  (with-accepted-exit-codes
+   1
+   (setenv
+    OCAML_ERROR_STYLE
+    short
+    (with-outputs-to
+     %{targets}
+     (run ./pp.exe -impl nested_pattern.ml -o %{null}))))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff nested_pattern.expected nested_pattern.output)))
+
+(rule
+ (targets include.output)
+ (deps include.mli)
+ (action
+  (with-accepted-exit-codes
+   1
+   (setenv
+    OCAML_ERROR_STYLE
+    short
+    (with-outputs-to
+     %{targets}
+     (run ./pp.exe -intf include.mli -o %{null}))))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff include.expected include.output)))

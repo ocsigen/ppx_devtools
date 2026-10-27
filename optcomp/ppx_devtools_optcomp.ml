@@ -28,15 +28,16 @@
     [os_type] (a string, e.g. "Unix" / "Win32" / "Cygwin"),
     combined with the usual comparison and boolean operators (see
     {!Ppx_devtools_predicate.Predicate}). They can be placed
-    on module (Pstr_module),
-    toplevel bindings (Pstr_value, Pstr_primitive)
-    type declarations (Pstr_type, Psig_type)
-    variant constructors (pcd_attributes)
-    and extension constructors (pext_attributes)
+    on module (Pstr_module, Psig_module),
+    module types (Pstr_modtype, Psig_modtype),
+    toplevel bindings (Pstr_value, Pstr_primitive, Psig_value),
+    exceptions (Pstr_exception, Psig_exception),
+    type declarations, variant and extension constructors,
     toplevel extensions, e.g. [let%expect_test "..." = ... [@@if ...]]
-    (Pstr_extension)
-    pattern in case (pc_lhs)
-    and module in signature (Psig_module)
+    (Pstr_extension),
+    pattern in case (pc_lhs) and the alternatives of an or-pattern,
+    and as a floating attribute [@@@if ...], gating the rest of the structure
+    or signature. An [@if] anywhere else is an error.
 
     For toplevel extensions to be gated we must run before context-free
     rewriters such as ppx_devtools-expect expand them; this is achieved by
@@ -47,6 +48,10 @@
 open StdLabels
 open Ppxlib.Parsetree
 module Predicate = Ppx_devtools_predicate.Predicate
+
+(* Locations of the [@if] attributes that have been evaluated. Any other
+   [@if] left in the tree is in a position that is not supported. *)
+let evaluated = Hashtbl.create 16
 
 let keep _loc (attrs : attributes) =
   let ifs =
@@ -59,6 +64,7 @@ let keep _loc (attrs : attributes) =
   | _ -> (
       let keep_one ({ attr_payload; attr_loc; _ } as attr) =
         Ppxlib.Attribute.mark_as_handled_manually attr;
+        Hashtbl.replace evaluated attr_loc ();
         let e =
           match attr_payload with
           | PStr [ { pstr_desc = Pstr_eval (e, []); _ } ] -> e
@@ -83,12 +89,15 @@ let filter_map ~f l =
   List.rev l
 
 let rec filter_pattern = function
-  | { ppat_desc = Ppat_or (p1, p2); _ } as p -> (
-      match filter_pattern p1, filter_pattern p2 with
-      | None, None -> None
-      | Some p1, None -> Some p1
-      | None, Some p2 -> Some p2
-      | Some p1, Some p2 -> Some { p with ppat_desc = Ppat_or (p1, p2) })
+  | { ppat_desc = Ppat_or (p1, p2); ppat_attributes; ppat_loc; _ } as p -> (
+      if not (keep ppat_loc ppat_attributes)
+      then None
+      else
+        match filter_pattern p1, filter_pattern p2 with
+        | None, None -> None
+        | Some p1, None -> Some p1
+        | None, Some p2 -> Some p2
+        | Some p1, Some p2 -> Some { p with ppat_desc = Ppat_or (p1, p2) })
   | { ppat_attributes; ppat_loc; _ } as p ->
       if keep ppat_loc ppat_attributes then Some p else None
 
@@ -142,35 +151,33 @@ let strip_extension_if ((name, payload) : extension) ext_attrs =
   in
   (name, payload), strip_if ext_attrs
 
-(* A floating attribute [@@@if cond] gates the rest of the enclosing
-   structure: when [cond] is false every following item is dropped, when it is
-   true the marker itself is removed. This is convenient to gate a whole test
-   module on an OCaml version without repeating [@@if] on each item. *)
-let truncate_floating_str items =
-  let rec loop = function
-    | [] -> []
-    | { pstr_desc = Pstr_attribute attr; pstr_loc; _ } :: rest when is_if_attr attr ->
-        if keep pstr_loc [ attr ] then loop rest else []
-    | item :: rest -> item :: loop rest
-  in
-  loop items
+let keep_exception { ptyexn_attributes; ptyexn_constructor; ptyexn_loc } =
+  keep ptyexn_loc ptyexn_attributes
+  && keep ptyexn_constructor.pext_loc ptyexn_constructor.pext_attributes
 
 let filter_type_declarations l =
   filter_map l ~f:(fun d -> if keep d.ptype_loc d.ptype_attributes then Some d else None)
 
-exception Drop_case
+exception Drop_item
+
+(* A floating attribute [@@@if cond] gates the rest of the enclosing structure
+   or signature: when [cond] is false every following item is dropped, when it
+   is true the marker itself is removed. This is convenient to gate a whole test
+   module on an OCaml version without repeating [@@if] on each item. *)
+exception Drop_rest
+
+let floating_if loc attr = if keep loc [ attr ] then raise Drop_item else raise Drop_rest
 
 let traverse =
   object (self)
     inherit Ppxlib.Ast_traverse.map as super
-
-    method! structure items = super#structure (truncate_floating_str items)
 
     method! structure_item item =
       (* Handle gated toplevel extensions (e.g. [let%expect_test]) before
          recursing, so the whole extension is dropped before context-free
          rewriters expand it. *)
       match item.pstr_desc with
+      | Pstr_attribute attr when is_if_attr attr -> floating_if item.pstr_loc attr
       | Pstr_extension (ext, ext_attrs) -> (
           match extension_if_attrs ext ext_attrs with
           | [] -> self#structure_item_default item
@@ -203,22 +210,31 @@ let traverse =
           | [] -> drop_str item.pstr_loc
           | l -> { item with pstr_desc = Pstr_type (r, l) })
       | Pstr_typext { ptyext_constructors = []; _ } -> drop_str item.pstr_loc
+      | Pstr_exception exn -> if keep_exception exn then item else drop_str item.pstr_loc
+      | Pstr_modtype { pmtd_attributes; pmtd_loc; _ } ->
+          if keep pmtd_loc pmtd_attributes then item else drop_str pmtd_loc
       | _ -> item
 
-    (* Match cases are not always traversed through [cases]: with OxCaml's
-       ppxlib, the cases of a [function] are mapped with [self#list
-       self#case]. So [case] raises [Drop_case] when its pattern is gated
-       out, and [list] removes the corresponding element. *)
+    (* Lists are mapped with [self#list], also where the shape of the AST
+       differs: with OxCaml's ppxlib, the cases of a [function] are not
+       traversed through [cases], and a signature is a record. So list
+       elements raise [Drop_item] to be removed, and [Drop_rest] to remove
+       the following elements as well. *)
     method! list : 'a. ('a -> 'a) -> 'a list -> 'a list =
       fun f l ->
-        filter_map l ~f:(fun x ->
-            match f x with
-            | x -> Some x
-            | exception Drop_case -> None)
+        let rec loop acc = function
+          | [] -> List.rev acc
+          | x :: rest -> (
+              match f x with
+              | x -> loop (x :: acc) rest
+              | exception Drop_item -> loop acc rest
+              | exception Drop_rest -> List.rev acc)
+        in
+        loop [] l
 
     method! case case =
       match filter_pattern case.pc_lhs with
-      | None -> raise Drop_case
+      | None -> raise Drop_item
       | Some pattern -> super#case { case with pc_lhs = pattern }
 
     method! type_kind kind =
@@ -238,23 +254,53 @@ let traverse =
       }
 
     method! signature_item item =
+      match item.psig_desc with
+      | Psig_attribute attr when is_if_attr attr -> floating_if item.psig_loc attr
+      | _ -> self#signature_item_default item
+
+    method private signature_item_default item =
       let item = super#signature_item item in
       match item.psig_desc with
       | Psig_module { pmd_attributes; pmd_loc; _ } ->
           if keep pmd_loc pmd_attributes then item else drop_sig pmd_loc
+      | Psig_value { pval_attributes; pval_loc; _ } ->
+          if keep pval_loc pval_attributes then item else drop_sig pval_loc
       | Psig_type (r, l) -> (
           match filter_type_declarations l with
           | [] -> drop_sig item.psig_loc
           | l -> { item with psig_desc = Psig_type (r, l) })
       | Psig_typext { ptyext_constructors = []; _ } -> drop_sig item.psig_loc
+      | Psig_exception exn -> if keep_exception exn then item else drop_sig item.psig_loc
+      | Psig_modtype { pmtd_attributes; pmtd_loc; _ } ->
+          if keep pmtd_loc pmtd_attributes then item else drop_sig pmtd_loc
       | _ -> item
   end
+
+(* Fail on the [@if] attributes that were not evaluated, rather than silently
+   keeping the code they are attached to. *)
+let check_evaluated =
+  object
+    inherit Ppxlib.Ast_traverse.iter as super
+
+    method! attribute attr =
+      if is_if_attr attr && not (Hashtbl.mem evaluated attr.attr_loc)
+      then Location.raise_errorf ~loc:attr.attr_loc "[@if] is not supported here";
+      super#attribute attr
+  end
+
+let structure items =
+  let items = traverse#structure items in
+  check_evaluated#structure items;
+  items
+
+let signature items =
+  let items = traverse#signature items in
+  check_evaluated#signature items;
+  items
 
 let () =
   Ppxlib.Driver.register_transformation
     ~instrument:
-      (Ppxlib.Driver.Instrument.make
-         traverse#structure
-         ~position:Ppxlib.Driver.Instrument.Before)
-    ~intf:traverse#signature
+      (Ppxlib.Driver.Instrument.make structure ~position:Ppxlib.Driver.Instrument.Before)
+    ~intf:signature
     "ppx_devtools-optcomp"
