@@ -31,10 +31,12 @@ let rstrip s =
   done;
   String.sub s 0 !n
 
+(* Tabs count as one column, like spaces: the lines of a literal indented with
+   tabs share the same prefix. *)
 let leading_spaces s =
   let n = String.length s in
   let i = ref 0 in
-  while !i < n && Char.equal s.[!i] ' ' do
+  while !i < n && (Char.equal s.[!i] ' ' || Char.equal s.[!i] '\t') do
     incr i
   done;
   !i

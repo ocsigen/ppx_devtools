@@ -87,6 +87,7 @@ val register_test :
   -> condition:(unit -> bool)
   -> expectations:variant array array
   -> body_end:int
+  -> test_start:int
   -> last_statement_start:int
   -> open_tail:(int * int) option
   -> uncaught_exn:uncaught_exn option
@@ -100,8 +101,10 @@ val register_test :
     Output printed after the last assertion point gets a new [%expect] at the
     end of the body, which is described by byte offsets in the source:
     - [body_end]: the end of the test body, where the [%expect] is inserted;
+    - [test_start]: the start of the [let%expect_test];
     - [last_statement_start]: the start of its last statement, whose
-      indentation the [%expect] gets;
+      indentation the [%expect] gets (one step past the test's when it is on
+      the line of the [let%expect_test]);
     - [open_tail]: the span of a [match] or [try] the body ends with, which is
       parenthesized first.
 
