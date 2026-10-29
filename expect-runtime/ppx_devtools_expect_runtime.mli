@@ -70,7 +70,7 @@ type uncaught_exn =
   { expected_exn : string (* contents of the literal *)
   ; exn_payload_start : int (* byte offset of the literal token in the source *)
   ; exn_payload_end : int (* byte offset just past the literal token *)
-  ; attribute_start : int (* end of the test body, before the attribute *)
+  ; attribute_start : int (* byte offset of the attribute *)
   ; attribute_end : int (* byte offset just past the attribute *)
   }
 (** The [[@@expect.uncaught_exn {| ... |}]] attribute of a test: the exception
@@ -105,8 +105,8 @@ val register_test :
     - [last_statement_start]: the start of its last statement, whose
       indentation the [%expect] gets (one step past the test's when it is on
       the line of the [let%expect_test]);
-    - [open_tail]: the span of a [match] or [try] the body ends with, which is
-      parenthesized first.
+    - [open_tail]: the span of a [match], [try] or [function] the body ends
+      with, which is parenthesized first.
 
     [uncaught_exn] is the exception the test is expected to raise, if any. *)
 
