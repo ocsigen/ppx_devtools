@@ -52,6 +52,7 @@ type variant =
   ; expect_end : int
   ; payload_start : int
   ; payload_end : int
+  ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
   }
 
 let invalid ~loc fmt = Location.raise_errorf ~loc fmt
@@ -130,6 +131,7 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
       ; expect_end
       ; payload_start = p
       ; payload_end = p
+      ; in_sequence = true
       }
   | PStr [ { pstr_desc = Pstr_eval (lit, eval_attrs); _ } ] -> (
       match lit.pexp_desc with
@@ -152,6 +154,7 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
           ; expect_end
           ; payload_start = str_loc.loc_start.pos_cnum - delim_len
           ; payload_end = str_loc.loc_end.pos_cnum + delim_len
+          ; in_sequence = true
           }
       | _ -> invalid ~loc:lit.pexp_loc "[%%expect] expects a string literal payload")
   | _ -> invalid ~loc:ext_loc "[%%expect] expects a string literal payload"
@@ -215,7 +218,7 @@ let transform_body (body : expression) : expression * variant list array =
             match classify e with
             | Expect v ->
                 let loc = e.pexp_loc in
-                check ~loc (alloc_group [ v ])
+                check ~loc (alloc_group [ { v with in_sequence = false } ])
             | Output ->
                 let loc = e.pexp_loc in
                 [%expr [%e Ast_builder.Default.evar ~loc (runtime ^ ".read_output")] ()]
@@ -264,6 +267,7 @@ let evariant ~loc (v : variant) : expression =
     ; expect_end = [%e Ast_builder.Default.eint ~loc v.expect_end]
     ; payload_start = [%e Ast_builder.Default.eint ~loc v.payload_start]
     ; payload_end = [%e Ast_builder.Default.eint ~loc v.payload_end]
+    ; in_sequence = [%e Ast_builder.Default.ebool ~loc v.in_sequence]
     }]
 
 let eexpectations ~loc (groups : variant list array) : expression =
@@ -355,12 +359,31 @@ let expand_test ~loc (vb : value_binding) : structure_item =
   let end_pos = vb.pvb_loc.loc_end.pos_cnum - pos.pos_bol in
   let body_end = vb.pvb_expr.pexp_loc.loc_end.pos_cnum in
   let last_statement_start =
-    let rec last (e : expression) =
+    (List.hd (List.rev (flatten_seq vb.pvb_expr))).pexp_loc.loc_start.pos_cnum
+  in
+  (* A [match] or [try] at the end of the body would capture a statement
+     appended after it into its last case: promotion parenthesizes it first. *)
+  let open_tail =
+    let rec find (e : expression) =
       match e.pexp_desc with
-      | Pexp_sequence (_, e) -> last e
-      | _ -> e
+      | Pexp_match _ | Pexp_try _ -> Some e.pexp_loc
+      | Pexp_sequence (_, e)
+      | Pexp_let (_, _, e)
+      | Pexp_letmodule (_, _, e)
+      | Pexp_letexception (_, e)
+      | Pexp_open (_, e)
+      | Pexp_letop { body = e; _ }
+      | Pexp_ifthenelse (_, _, Some e)
+      | Pexp_ifthenelse (_, e, None) -> find e
+      | _ -> None
     in
-    (last vb.pvb_expr).pexp_loc.loc_start.pos_cnum
+    match find vb.pvb_expr with
+    | None -> [%expr None]
+    | Some l ->
+        [%expr
+          Some
+            ( [%e Ast_builder.Default.eint ~loc l.loc_start.pos_cnum]
+            , [%e Ast_builder.Default.eint ~loc l.loc_end.pos_cnum] )]
   in
   let body, groups = transform_body vb.pvb_expr in
   let expectations = eexpectations ~loc groups in
@@ -384,6 +407,7 @@ let expand_test ~loc (vb : value_binding) : structure_item =
         ~expectations:[%e expectations]
         ~body_end:[%e Ast_builder.Default.eint ~loc body_end]
         ~last_statement_start:[%e Ast_builder.Default.eint ~loc last_statement_start]
+        ~open_tail:[%e open_tail]
         (fun () -> [%e body])]
 
 let impl_mapper =

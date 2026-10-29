@@ -72,6 +72,7 @@ type variant =
   ; expect_end : int
   ; payload_start : int
   ; payload_end : int
+  ; in_sequence : bool
   }
 
 type test =
@@ -86,6 +87,7 @@ type test =
   ; expectations : variant array array
   ; body_end : int
   ; last_statement_start : int
+  ; open_tail : (int * int) option
   ; body : unit -> unit
   }
 
@@ -103,6 +105,7 @@ let register_test
     ~expectations
     ~body_end
     ~last_statement_start
+    ~open_tail
     body =
   tests :=
     { lib
@@ -116,6 +119,7 @@ let register_test
     ; expectations
     ; body_end
     ; last_statement_start
+    ; open_tail
     ; body
     }
     :: !tests
@@ -165,7 +169,7 @@ let mismatch r ~expected ~actual correction =
 
 (* Output that no [%expect] accounts for is expected to be empty. On a
    mismatch, a new [%expect] is inserted at [pos]. *)
-let check_unexpected r ~pos ~indent_pos actual =
+let check_unexpected r ~pos ~indent_pos ~parens actual =
   if not (String.equal (Text.normalize actual) "")
   then
     mismatch
@@ -176,7 +180,7 @@ let check_unexpected r ~pos ~indent_pos actual =
       ; payload_start = pos
       ; payload_end = pos
       ; actual
-      ; kind = New_expect { indent_pos }
+      ; kind = New_expect { indent_pos; parens }
       }
 
 let check_group r group actual =
@@ -196,9 +200,19 @@ let check_group r group actual =
           }
   | None ->
       (* No default variant, and no condition holds: insert a default
-         [%expect] after the last variant of the group. *)
+         [%expect] after the last variant of the group. Outside of a sequence
+         (e.g. [if c then [%expect ...] else ...]), the two are parenthesized
+         into one. *)
       let last = group.(Array.length group - 1) in
-      check_unexpected r ~pos:last.expect_end ~indent_pos:last.expect_start actual
+      check_unexpected
+        r
+        ~pos:last.expect_end
+        ~indent_pos:last.expect_start
+        ~parens:
+          (if last.in_sequence
+           then Corrected.No_parens
+           else Around { start = group.(0).expect_start })
+        actual
 
 let check ~index =
   match !current with
@@ -542,14 +556,21 @@ let exit () =
         in
         let elapsed = Sys.time () -. t0 in
         (* Output printed after the last assertion point: when the test
-           completes, it gets a new [%expect] at the end of the body. *)
+           completes, it gets a new [%expect] at the end of the body. When it
+           raises, there is no point to insert one at: the output goes with
+           the exception in the failure report. *)
+        let trailing = Capture.read cap in
         if Option.is_none exn
         then
           check_unexpected
             r
             ~pos:test.body_end
             ~indent_pos:test.last_statement_start
-            (Capture.read cap);
+            ~parens:
+              (match test.open_tail with
+              | None -> Corrected.No_parens
+              | Some (start, stop) -> Before { start; stop })
+            trailing;
         current := None;
         Capture.stop cap;
         if cfg.verbose then Printf.printf " (%.3f sec)\n%!" elapsed;
@@ -563,11 +584,17 @@ let exit () =
         (match exn with
         | None -> ()
         | Some (e, bt) ->
+            let output =
+              if String.equal (Text.normalize trailing) ""
+              then ""
+              else Printf.sprintf "  output:\n%s\n" trailing
+            in
             report
               (Printf.sprintf
-                 "FAILED: %s\n  exception: %s\n%s\n"
+                 "FAILED: %s\n  exception: %s\n%s%s\n"
                  descr
                  (Printexc.to_string e)
+                 output
                  bt));
         if Option.is_some exn || r.errors <> [] then incr errors
       end)
