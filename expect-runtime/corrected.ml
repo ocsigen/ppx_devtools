@@ -25,8 +25,11 @@ type kind =
      [payload_start, payload_end), or insert a new attribute there when the
      span is empty. *)
   | Uncaught_exn
-  (* Delete [payload_start, payload_end). *)
-  | Delete
+  (* Replace [payload_start, payload_end) (a whole [%expect] node) with a
+     new [%expect] holding [actual]. *)
+  | Expect_node
+  (* Replace [payload_start, payload_end) with the given text. *)
+  | Replace of string
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
      like the line holding [indent_pos]. *)
   | New_expect of
@@ -177,7 +180,15 @@ let write ~root corrections =
                       else literal
                     in
                     [ c.payload_start, c.payload_end, literal ]
-                | Delete -> [ c.payload_start, c.payload_end, "" ]
+                | Expect_node ->
+                    let opening = "[%expect " in
+                    let literal =
+                      render_literal
+                        ~column:(column_of source c.payload_start + String.length opening)
+                        ~actual:c.actual
+                    in
+                    [ c.payload_start, c.payload_end, opening ^ literal ^ "]" ]
+                | Replace s -> [ c.payload_start, c.payload_end, s ]
                 | New_expect { indent_pos; parens } -> (
                     let indent = indentation_of source indent_pos in
                     let opening = "[%expect " in

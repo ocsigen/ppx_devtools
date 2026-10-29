@@ -1,5 +1,0 @@
-FAILED: test/promote/disagree.ml:1 disagreeing runs
-  the [%expect] at line 5 ran several times with different outputs:
--a
-+b
-ppx_devtools-expect: FAILED 1 / 2 tests

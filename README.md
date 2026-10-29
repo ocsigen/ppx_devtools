@@ -72,9 +72,17 @@ point. `[%expect.output]` returns it as a string instead. When the output does
 not match, `dune promote` updates the test.
 
 Output printed after the last assertion point is expected to be empty: when it
-is not, promotion adds an `[%expect]` at the end of the test. An assertion
-point that runs several times, for instance in a loop, must see the same output
-each time, otherwise the test fails.
+is not, promotion adds an `[%expect]` at the end of the test. As in
+`ppx_expect`:
+
+- an exception escaping the test is recorded, with the output printed after
+  the last assertion point, in a `[@@expect.uncaught_exn {| ... |}]` attribute
+  on the test;
+- an `[%expect]` that is never reached becomes `[%expect.unreachable]`, which
+  fails when reached (an `[%expect]` with `[@when]` variants is left alone);
+- an assertion point that runs several times, for instance in a loop, must see
+  the same output each time. Otherwise, promotion records every output under a
+  CR comment, and the test keeps failing until it is fixed.
 
 ### Conditional snapshots and tests
 

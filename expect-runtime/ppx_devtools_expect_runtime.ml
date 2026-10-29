@@ -73,6 +73,7 @@ type variant =
   ; payload_start : int
   ; payload_end : int
   ; in_sequence : bool
+  ; is_unreachable : bool
   }
 
 type uncaught_exn =
@@ -142,11 +143,9 @@ type run =
   ; expectations : variant array array
   ; filename : string
   ; description : string
-  ; seen : (int, string) Hashtbl.t (* output of the first run of each assertion point *)
-  ; mutable disagreeing : int list (* assertion points already reported *)
+  ; outputs : string list array (* per group, the output of each run, latest first *)
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
-  ; mutable errors : string list (* failures, even when promoting *)
   }
 
 let current : run option ref = ref None
@@ -174,6 +173,10 @@ let select_variant group =
       in
       find_default 0
 
+let report r correction report =
+  r.corrections <- correction :: r.corrections;
+  r.reports <- report :: r.reports
+
 let mismatch r ~expected ~actual correction =
   r.corrections <- correction :: r.corrections;
   r.reports <- Diff.make ~description:r.description ~expected ~actual :: r.reports
@@ -194,10 +197,40 @@ let check_unexpected r ~pos ~indent_pos ~parens actual =
       ; kind = New_expect { indent_pos; parens }
       }
 
-let check_group r group actual =
+(* Like ppx_expect, an assertion point that ran several times with different
+   outputs gets all of them under a CR, and keeps failing until it gives a
+   single output. *)
+let cr_for_multiple_outputs outputs =
+  let cr = "(* CR expect_test: Test ran multiple times with different test outputs *)" in
+  let n = List.length outputs in
+  let header i =
+    let header = Printf.sprintf "=== Output %d / %d ===" (i + 1) n in
+    let pad = String.length cr - String.length header in
+    if pad <= 0
+    then header
+    else String.make (pad / 2) '=' ^ header ^ String.make (pad - (pad / 2)) '='
+  in
+  String.concat
+    "\n"
+    (cr :: List.concat (List.mapi (fun i o -> [ header i; Text.normalize o ]) outputs))
+
+let check_group r group ~multiple actual =
   match select_variant group with
+  | Some v when v.is_unreachable ->
+      (* A reached [%expect.unreachable] becomes a plain [%expect]. *)
+      mismatch
+        r
+        ~expected:""
+        ~actual
+        { Corrected.filename = r.filename
+        ; payload_start = v.expect_start
+        ; payload_end = v.expect_end
+        ; actual
+        ; kind = Expect_node
+        }
   | Some v ->
-      if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
+      if
+        multiple || not (String.equal (Text.normalize actual) (Text.normalize v.expected))
       then
         mismatch
           r
@@ -241,7 +274,7 @@ let check_uncaught_exn r ~body_end ~expected exn trailing =
         ; payload_start = u.attribute_start
         ; payload_end = u.attribute_end
         ; actual = ""
-        ; kind = Delete
+        ; kind = Replace ""
         }
   | Some (e, backtrace), _ ->
       let actual =
@@ -279,37 +312,45 @@ let check ~index =
   | None -> ()
   | Some r ->
       let actual = Capture.read r.cap in
-      if index >= 0 && index < Array.length r.expectations
-      then begin
-        let group = r.expectations.(index) in
-        if Array.length group > 0
-        then
-          match Hashtbl.find_opt r.seen index with
-          | None ->
-              Hashtbl.add r.seen index actual;
-              check_group r group actual
-          | Some first ->
-              (* The assertion point runs again (e.g. in a loop): its output
-                 must not change, as a single snapshot cannot record both. *)
-              if
-                (not (String.equal (Text.normalize first) (Text.normalize actual)))
-                && not (List.mem index r.disagreeing)
-              then begin
-                r.disagreeing <- index :: r.disagreeing;
-                r.errors <-
-                  Diff.make
-                    ~description:
-                      (Printf.sprintf
-                         "%s\n\
-                         \  the [%%expect] at line %d ran several times with different \
-                          outputs:"
-                         r.description
-                         group.(0).line)
-                    ~expected:first
-                    ~actual
-                  :: r.errors
-              end
-      end
+      if index >= 0 && index < Array.length r.outputs
+      then r.outputs.(index) <- actual :: r.outputs.(index)
+
+(* Check the outputs recorded by each assertion point once the test is over.
+   As in ppx_expect, a plain [%expect] that was never reached becomes an
+   [%expect.unreachable]. A group with [@when] variants is left alone: it may
+   only be unreachable under some axes. *)
+let check_groups r =
+  Array.iteri
+    (fun index group ->
+      if Array.length group > 0
+      then
+        match List.rev r.outputs.(index) with
+        | [] ->
+            let v = group.(0) in
+            if Array.length group = 1 && v.is_default && not v.is_unreachable
+            then
+              report
+                r
+                { Corrected.filename = r.filename
+                ; payload_start = v.expect_start
+                ; payload_end = v.expect_end
+                ; actual = ""
+                ; kind = Replace "[%expect.unreachable]"
+                }
+                (Printf.sprintf
+                   "FAILED: %s\n  the [%%expect] at line %d was not reached\n"
+                   r.description
+                   v.line)
+        | first :: _ as outputs ->
+            let multiple =
+              not
+                (List.for_all
+                   (fun o -> String.equal (Text.normalize o) (Text.normalize first))
+                   outputs)
+            in
+            let actual = if multiple then cr_for_multiple_outputs outputs else first in
+            check_group r group ~multiple actual)
+    r.expectations
 
 let read_output () =
   match !current with
@@ -555,7 +596,6 @@ let exit () =
   in
   let all_corrections = ref [] in
   let mismatches = ref 0 in
-  let errors = ref 0 in
   let ran = ref 0 in
   (* Like ppx_inline_test, hold failure reports until the end in verbose mode so
      they don't interleave with the per-test progress lines on stdout. *)
@@ -601,11 +641,9 @@ let exit () =
           ; expectations = test.expectations
           ; filename = test.filename
           ; description = descr
-          ; seen = Hashtbl.create 8
-          ; disagreeing = []
+          ; outputs = Array.make (Array.length test.expectations) []
           ; corrections = []
           ; reports = []
-          ; errors = []
           }
         in
         current := Some r;
@@ -616,6 +654,7 @@ let exit () =
           | exception e -> Some (e, Printexc.get_backtrace ())
         in
         let elapsed = Sys.time () -. t0 in
+        check_groups r;
         (* Output printed after the last assertion point: when the test
            completes, it gets a new [%expect] at the end of the body. When it
            raises, it goes with the exception. *)
@@ -640,14 +679,12 @@ let exit () =
         current := None;
         Capture.stop cap;
         if cfg.verbose then Printf.printf " (%.3f sec)\n%!" elapsed;
-        (match r.corrections with
+        match r.corrections with
         | [] -> ()
         | corrections ->
             incr mismatches;
             all_corrections := List.rev_append corrections !all_corrections;
-            if not dune_mode then List.iter report (List.rev r.reports));
-        List.iter report (List.rev r.errors);
-        if r.errors <> [] then incr errors
+            if not dune_mode then List.iter report (List.rev r.reports)
       end)
     (List.rev !tests);
   (match List.rev !delayed with
@@ -657,7 +694,7 @@ let exit () =
       List.iter (fun s -> output_string stderr s) reports);
   let unreadable = Corrected.write ~root:cfg.source_tree_root !all_corrections in
   flush stderr;
-  let failed = if dune_mode then !errors else !mismatches + !errors in
+  let failed = if dune_mode then 0 else !mismatches in
   if failed > 0
   then Printf.eprintf "ppx_devtools-expect: FAILED %d / %d tests\n%!" failed !ran;
   if failed > 0 || unreadable > 0 then Stdlib.exit 2;

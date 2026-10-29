@@ -61,6 +61,7 @@ type variant =
   ; payload_start : int (* byte offset of the literal token in the source *)
   ; payload_end : int (* byte offset just past the literal token *)
   ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
+  ; is_unreachable : bool (* [%expect.unreachable] *)
   }
 (** One environment-specific variant of an [%expect] assertion point. *)
 
@@ -101,8 +102,9 @@ val register_test :
     [uncaught_exn] is the exception the test is expected to raise, if any. *)
 
 val check : index:int -> unit
-(** Called at each [%expect]/[%expect.when] point: compares the output captured
-    since the previous point against the active variant of group [index]. *)
+(** Called at each [%expect]/[%expect.when] point: records the output captured
+    since the previous point for group [index]. The outputs are checked
+    against the active variant of the group when the test ends. *)
 
 val read_output : unit -> string
 (** Called for [%expect.output]: returns (and consumes) the output captured

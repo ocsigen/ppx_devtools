@@ -33,6 +33,7 @@
       into a runtime test against {!Ppx_devtools_expect_runtime.Axes}. Further axes
       can be added with {!register_axes}. A plain
       [%expect] (no [\[@when\]]) is the default variant of its group.
+    - [%expect.unreachable] into an assertion point that fails when reached.
     - [%expect.output] into [Ppx_devtools_expect_runtime.read_output ()], returning
       the output captured since the previous assertion point. *)
 
@@ -53,6 +54,7 @@ type variant =
   ; payload_start : int
   ; payload_end : int
   ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
+  ; is_unreachable : bool (* [%expect.unreachable] *)
   }
 
 let invalid ~loc fmt = Location.raise_errorf ~loc fmt
@@ -132,6 +134,7 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
       ; payload_start = p
       ; payload_end = p
       ; in_sequence = true
+      ; is_unreachable = false
       }
   | PStr [ { pstr_desc = Pstr_eval (lit, eval_attrs); _ } ] -> (
       match lit.pexp_desc with
@@ -155,6 +158,7 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
           ; payload_start = str_loc.loc_start.pos_cnum - delim_len
           ; payload_end = str_loc.loc_end.pos_cnum + delim_len
           ; in_sequence = true
+          ; is_unreachable = false
           }
       | _ -> invalid ~loc:lit.pexp_loc "[%%expect] expects a string literal payload")
   | _ -> invalid ~loc:ext_loc "[%%expect] expects a string literal payload"
@@ -168,6 +172,12 @@ let classify (e : expression) : point =
   match e.pexp_desc with
   | Pexp_extension ({ txt = "expect"; _ }, payload) ->
       Expect (variant_of_payload ~ext_loc:e.pexp_loc payload)
+  | Pexp_extension ({ txt = "expect.unreachable"; loc }, payload) -> (
+      match payload with
+      | PStr [] ->
+          let v = variant_of_payload ~ext_loc:e.pexp_loc payload in
+          Expect { v with is_unreachable = true }
+      | _ -> invalid ~loc "[%%expect.unreachable] does not take a payload")
   | Pexp_extension ({ txt = "expect.output"; loc }, payload) -> (
       match payload with
       | PStr [] -> Output
@@ -232,14 +242,16 @@ let transform_body (body : expression) : expression * variant list array =
           | stmt :: rest -> (
               match classify stmt with
               | Expect v ->
-                  let run, rest = gather_run [ v ] rest in
+                  let run, rest =
+                    if v.is_unreachable then [ v ], rest else gather_run [ v ] rest
+                  in
                   check ~loc:stmt.pexp_loc (alloc_group run) :: go rest
               | Output | Other -> self#expression stmt :: go rest)
         and gather_run acc = function
           | stmt :: rest -> (
               match classify stmt with
-              | Expect v -> gather_run (v :: acc) rest
-              | Output | Other -> List.rev acc, stmt :: rest)
+              | Expect v when not v.is_unreachable -> gather_run (v :: acc) rest
+              | Expect _ | Output | Other -> List.rev acc, stmt :: rest)
           | [] -> List.rev acc, []
         in
         build_seq ~loc (go stmts)
@@ -268,6 +280,7 @@ let evariant ~loc (v : variant) : expression =
     ; payload_start = [%e Ast_builder.Default.eint ~loc v.payload_start]
     ; payload_end = [%e Ast_builder.Default.eint ~loc v.payload_end]
     ; in_sequence = [%e Ast_builder.Default.ebool ~loc v.in_sequence]
+    ; is_unreachable = [%e Ast_builder.Default.ebool ~loc v.is_unreachable]
     }]
 
 let eexpectations ~loc (groups : variant list array) : expression =
