@@ -7,10 +7,10 @@ let%expect_test "different outputs, promoted" =
     (fun s ->
       print_string s;
       [%expect {|
-               (* CR expect_test: Test ran multiple times with different test outputs *)
-               ============================= Output 1 / 2 ==============================
+               (* CR ppx_devtools-expect: this [%expect] saw different outputs *)
+               ========================== Output 1 / 2 ==========================
                a
-               ============================= Output 2 / 2 ==============================
+               ========================== Output 2 / 2 ==========================
                b
                |}])
     [ "b"; "a"; "b" ]
@@ -22,10 +22,10 @@ let%expect_test "different outputs, promoted, in a group" =
       print_string s;
       [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
       [%expect {|
-               (* CR expect_test: Test ran multiple times with different test outputs *)
-               ============================= Output 1 / 2 ==============================
+               (* CR ppx_devtools-expect: this [%expect] saw different outputs *)
+               ========================== Output 1 / 2 ==========================
                a
-               ============================= Output 2 / 2 ==============================
+               ========================== Output 2 / 2 ==========================
                b
                |}])
     [ "b"; "a"; "b" ]
