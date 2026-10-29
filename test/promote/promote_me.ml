@@ -124,9 +124,29 @@ let%expect_test "unreached [%expect], after an exception" =
   [%expect {| unreached |}]
 [@@expect.uncaught_exn {| Stdlib.Exit |}]
 
-let%expect_test "unreached [%expect] with [@when] variants" =
-  if false then [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
+let%expect_test "unreached [@when] variant" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect ({| unreached |} [@when ocaml_version >= (4, 0, 0)])];
+    [%expect {| default |}]
+  end;
   print_string "reached";
   [%expect {| reached |}]
+
+let%expect_test "unreached default variant" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
+    [%expect {| unreached |}]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "reached [@when] [%expect.unreachable]" =
+  print_string "reached";
+  [%expect.unreachable] [@when ocaml_version >= (4, 0, 0)];
+  [%expect {| default |}]
 
 let () = Ppx_devtools_expect_runtime.exit ()

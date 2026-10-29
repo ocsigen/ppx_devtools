@@ -53,6 +53,7 @@ end
 
 type variant =
   { condition : unit -> bool (* reified [%expect.when] predicate *)
+  ; condition_span : (int * int) option (* byte offsets of its source *)
   ; is_default : bool (* [true] for a plain [%expect] with no [.when] *)
   ; expected : string (* contents of the [{| ... |}] literal *)
   ; line : int (* line of the [%expect] in the source *)
