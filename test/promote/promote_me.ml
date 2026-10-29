@@ -1,4 +1,4 @@
-(* Every expectation below is wrong on purpose. *)
+(* Every expectation below is wrong on purpose, except where noted. *)
 
 let%expect_test "guarded variant, parenthesized" =
   print_string "actual";
@@ -84,5 +84,49 @@ let%expect_test "uncaught exception, no longer raised" =
   print_string "trailing";
   print_newline ()
 [@@expect.uncaught_exn {| Stdlib.Exit |}]
+
+let%expect_test "different outputs" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect {| a |}])
+    [ "a"; "b"; "a" ]
+
+let%expect_test "same outputs" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect {| a |}])
+    [ "a"; "a" ]
+
+let%expect_test "reached [%expect.unreachable]" =
+  print_string "reached";
+  [%expect.unreachable]
+
+let%expect_test "unreached [%expect.unreachable]" =
+  if false then [%expect.unreachable];
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "unreached [%expect]" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect {| unreached |}]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "unreached [%expect], after an exception" =
+  print_string "reached";
+  [%expect {| reached |}];
+  if true then raise Exit;
+  [%expect {| unreached |}]
+[@@expect.uncaught_exn {| Stdlib.Exit |}]
+
+let%expect_test "unreached [%expect] with [@when] variants" =
+  if false then [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
+  print_string "reached";
+  [%expect {| reached |}]
 
 let () = Ppx_devtools_expect_runtime.exit ()
