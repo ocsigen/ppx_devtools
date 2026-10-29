@@ -52,9 +52,8 @@ let column_of source pos =
 
 let indentation_of source pos =
   let start = pos - column_of source pos in
-  let rec loop i =
-    if i < String.length source && Char.equal source.[i] ' ' then loop (i + 1) else i
-  in
+  let len = String.length source in
+  let rec loop i = if i < len && Char.equal source.[i] ' ' then loop (i + 1) else i in
   loop start - start
 
 (* Pick the shortest [{tag| ... |tag}] delimiter that does not clash with the
