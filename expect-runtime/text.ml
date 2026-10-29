@@ -31,15 +31,21 @@ let rstrip s =
   done;
   String.sub s 0 !n
 
-(* Tabs count as one column, like spaces: the lines of a literal indented with
-   tabs share the same prefix. *)
-let leading_spaces s =
+let leading_whitespace s =
   let n = String.length s in
   let i = ref 0 in
   while !i < n && (Char.equal s.[!i] ' ' || Char.equal s.[!i] '\t') do
     incr i
   done;
-  !i
+  String.sub s 0 !i
+
+let common_prefix a b =
+  let n = min (String.length a) (String.length b) in
+  let i = ref 0 in
+  while !i < n && Char.equal a.[!i] b.[!i] do
+    incr i
+  done;
+  String.sub a 0 !i
 
 let drop_leading_blanks lines =
   let rec loop = function
@@ -57,13 +63,26 @@ let canonical_lines s =
   match lines with
   | [] -> []
   | _ ->
+      (* The common indentation is a common prefix of whitespace, so lines
+         indented with tabs lose them, but a tab never matches a space. *)
       let indent =
         List.fold_left
-          (fun acc l -> if String.length l = 0 then acc else min acc (leading_spaces l))
-          max_int
+          (fun acc l ->
+            if String.length l = 0
+            then acc
+            else
+              let w = leading_whitespace l in
+              match acc with
+              | None -> Some w
+              | Some acc -> Some (common_prefix acc w))
+          None
           lines
       in
-      let indent = if indent = max_int then 0 else indent in
+      let indent =
+        match indent with
+        | None -> 0
+        | Some w -> String.length w
+      in
       List.map
         (fun l ->
           if String.length l <= indent

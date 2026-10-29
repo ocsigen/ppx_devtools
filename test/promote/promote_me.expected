@@ -170,6 +170,14 @@ let%expect_test "reached [@when] [%expect.unreachable]" =
   [%expect ({| reached |} [@when ocaml_version >= (4, 0, 0)])];
   [%expect {| default |}]
 
+let%expect_test "trailing output, after a match in an application" =
+  print_string
+  @@
+  (match Some 1 with
+  | Some _ -> "some"
+  | None -> "none");
+  [%expect {| some |}]
+
 let%expect_test "trailing output, one-line body" = print_string "trailing";
   [%expect {| trailing |}]
 
@@ -197,7 +205,19 @@ module Tabs = struct
 		         line 1
 		         line 2
 		         |}]
+
+	let%expect_test "tabs and spaces in the output" =
+		print_string "\ta\n b";
+		[%expect {|
+		         	a
+		          b
+		         |}]
 end
+
+let%expect_test "uncaught exception, no longer raised, after an attribute" =
+  print_string "trailing";
+  [%expect {| trailing |}]
+[@@ocaml.warning "-26"] (* kept *)
 [@@@ocamlformat "enable"]
 
 let () = Ppx_devtools_expect_runtime.exit ()

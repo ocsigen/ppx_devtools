@@ -70,7 +70,7 @@ type uncaught_exn =
   { expected_exn : string (* contents of the literal *)
   ; exn_payload_start : int (* byte offset of the literal token in the source *)
   ; exn_payload_end : int (* byte offset just past the literal token *)
-  ; attribute_start : int (* end of the test body, before the attribute *)
+  ; attribute_start : int (* byte offset of the attribute *)
   ; attribute_end : int (* byte offset just past the attribute *)
   }
 (** The [[@@expect.uncaught_exn {| ... |}]] attribute of a test: the exception

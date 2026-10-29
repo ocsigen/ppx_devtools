@@ -279,7 +279,7 @@ let check_uncaught_exn r ~body_end ~expected exn trailing =
         ; payload_start = u.attribute_start
         ; payload_end = u.attribute_end
         ; actual = ""
-        ; kind = Replace ""
+        ; kind = Delete_attribute
         }
   | Some (e, backtrace), _ ->
       let actual =

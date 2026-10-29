@@ -31,6 +31,9 @@ type kind =
   | Expect_node of { condition : (int * int) option }
   (* Replace [payload_start, payload_end) with the given text. *)
   | Replace of string
+  (* Delete the attribute in [payload_start, payload_end), and the whitespace
+     in front of it. *)
+  | Delete_attribute
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
      like the line holding [indent_pos]. When that is the first line of the
      test starting at [test_start], it is indented one step further. *)
@@ -219,6 +222,18 @@ let write ~root corrections =
                     in
                     [ c.payload_start, c.payload_end, opening ^ literal ^ closing ]
                 | Replace s -> [ c.payload_start, c.payload_end, s ]
+                | Delete_attribute ->
+                    let rec start i =
+                      if
+                        i > 0
+                        &&
+                        match source.[i - 1] with
+                        | ' ' | '\t' | '\n' | '\r' -> true
+                        | _ -> false
+                      then start (i - 1)
+                      else i
+                    in
+                    [ start c.payload_start, c.payload_end, "" ]
                 | New_expect { indent_pos; test_start; parens } -> (
                     let indent = statement_indentation source ~test_start indent_pos in
                     let opening = "[%expect " in
