@@ -319,8 +319,9 @@ let check ~index =
 
 (* Check the outputs recorded by each assertion point once the test is over.
    As in ppx_expect, an [%expect] that was never reached becomes an
-   [%expect.unreachable]. In a group, only the active variant does, keeping
-   its condition: the code may be reached under other axes. *)
+   [%expect.unreachable]. In a group, only the default variant does: the
+   [@when] variants keep their snapshots, as the code may be reached under
+   other axes. *)
 let check_groups r =
   Array.iteri
     (fun index group ->
@@ -328,7 +329,13 @@ let check_groups r =
       then
         match List.rev r.outputs.(index) with
         | [] -> (
-            match select_variant group with
+            let default =
+              Array.fold_left
+                (fun acc v -> if v.is_default then Some v else acc)
+                None
+                group
+            in
+            match default with
             | Some v when not v.is_unreachable ->
                 report
                   r
@@ -336,7 +343,7 @@ let check_groups r =
                   ; payload_start = v.expect_start
                   ; payload_end = v.expect_end
                   ; actual = ""
-                  ; kind = Unreachable_node { condition = v.condition_span }
+                  ; kind = Replace "[%expect.unreachable]"
                   }
                   (Printf.sprintf
                      "FAILED: %s\n  the [%%expect] at line %d was not reached\n"

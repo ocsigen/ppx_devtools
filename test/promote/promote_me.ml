@@ -134,13 +134,8 @@ let%expect_test "unreached [@when] variant" =
   print_string "reached";
   [%expect {| reached |}]
 
-let%expect_test "unreached default variant" =
-  if false
-  then begin
-    print_string "unreached";
-    [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
-    [%expect {| unreached |}]
-  end;
+let%expect_test "unreached [@when] variants, no default" =
+  if false then [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
   print_string "reached";
   [%expect {| reached |}]
 
