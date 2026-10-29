@@ -485,6 +485,7 @@ let expand_test ~loc ~item_attributes (vb : value_binding) : structure_item =
         ~condition:[%e condition]
         ~expectations:[%e expectations]
         ~body_end:[%e Ast_builder.Default.eint ~loc body_end]
+        ~test_start:[%e Ast_builder.Default.eint ~loc loc.loc_start.pos_cnum]
         ~last_statement_start:[%e Ast_builder.Default.eint ~loc last_statement_start]
         ~open_tail:[%e open_tail]
         ~uncaught_exn:[%e uncaught_exn]

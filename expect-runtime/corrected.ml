@@ -23,8 +23,8 @@ type kind =
   | Literal
   (* Replace the literal of an [[@@expect.uncaught_exn]] attribute in
      [payload_start, payload_end), or insert a new attribute there when the
-     span is empty. *)
-  | Uncaught_exn
+     span is empty, indented like the test starting at [test_start]. *)
+  | Uncaught_exn of { test_start : int }
   (* Replace [payload_start, payload_end) (a whole [%expect] node) with a
      new [%expect] holding [actual], keeping the [@when] predicate whose
      source is at [condition], if any. *)
@@ -32,9 +32,11 @@ type kind =
   (* Replace [payload_start, payload_end) with the given text. *)
   | Replace of string
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
-     like the line holding [indent_pos]. *)
+     like the line holding [indent_pos]. When that is the first line of the
+     test starting at [test_start], it is indented one step further. *)
   | New_expect of
       { indent_pos : int
+      ; test_start : int
       ; parens : parens
       }
 
@@ -71,11 +73,17 @@ let contains s sub =
   in
   loop 0
 
-let column_of source pos =
-  let rec line_start i =
-    if i <= 0 || Char.equal source.[i - 1] '\n' then i else line_start (i - 1)
-  in
-  pos - line_start pos
+let line_start source pos =
+  let rec loop i = if i <= 0 || Char.equal source.[i - 1] '\n' then i else loop (i - 1) in
+  loop pos
+
+(* Whitespace lining up with [pos]: what precedes it on its line, with every
+   character but tabs turned into a space. *)
+let padding_to source pos =
+  let start = line_start source pos in
+  String.map
+    (fun c -> if Char.equal c '\t' then c else ' ')
+    (String.sub source start (pos - start))
 
 (* [source] has an already parenthesized expression at [pos]. *)
 let parenthesized source pos =
@@ -85,11 +93,25 @@ let parenthesized source pos =
   in
   has "(" || has "begin " || has "begin\n"
 
+(* Leading whitespace of the line holding [pos]. *)
 let indentation_of source pos =
-  let start = pos - column_of source pos in
+  let start = line_start source pos in
   let len = String.length source in
-  let rec loop i = if i < len && Char.equal source.[i] ' ' then loop (i + 1) else i in
-  loop start - start
+  let rec loop i =
+    if i < len && (Char.equal source.[i] ' ' || Char.equal source.[i] '\t')
+    then loop (i + 1)
+    else i
+  in
+  String.sub source start (loop start - start)
+
+(* Indentation of a statement following the one at [pos], in the test
+   starting at [test_start]. *)
+let statement_indentation source ~test_start pos =
+  if line_start source pos = line_start source test_start
+  then indentation_of source test_start ^ "  "
+  else indentation_of source pos
+
+let spaces s = String.make (String.length s) ' '
 
 (* Pick the shortest [{tag| ... |tag}] delimiter that does not clash with the
    body. [tag = ""] gives the usual [{| ... |}]. *)
@@ -97,7 +119,8 @@ let rec choose_tag body n =
   let tag = String.make n '_' in
   if contains body ("|" ^ tag ^ "}") then choose_tag body (n + 1) else tag
 
-let render_literal ~column ~actual =
+(* [indent] is the whitespace in front of the lines of a multi-line literal. *)
+let render_literal ~indent ~actual =
   let lines = Text.canonical_lines actual in
   let body = String.concat "\n" lines in
   let tag = choose_tag body 0 in
@@ -106,7 +129,6 @@ let render_literal ~column ~actual =
   | [] -> opening ^ " " ^ closing
   | [ single ] -> Printf.sprintf "%s %s %s" opening single closing
   | _ ->
-      let indent = String.make column ' ' in
       let body =
         String.concat
           ""
@@ -161,7 +183,7 @@ let write ~root corrections =
                 | Literal ->
                     let literal =
                       render_literal
-                        ~column:(column_of source c.payload_start)
+                        ~indent:(padding_to source c.payload_start)
                         ~actual:c.actual
                     in
                     (* A bare [%expect] has no literal to replace (the span is
@@ -172,12 +194,14 @@ let write ~root corrections =
                       if c.payload_start = c.payload_end then " " ^ literal else literal
                     in
                     [ c.payload_start, c.payload_end, literal ]
-                | Uncaught_exn ->
-                    (* Laid out like ppx_expect does. *)
-                    let literal = render_literal ~column:2 ~actual:c.actual in
+                | Uncaught_exn { test_start } ->
+                    let indent = indentation_of source test_start in
+                    let literal =
+                      render_literal ~indent:(indent ^ "  ") ~actual:c.actual
+                    in
                     let literal =
                       if c.payload_start = c.payload_end
-                      then "\n[@@expect.uncaught_exn " ^ literal ^ "]"
+                      then "\n" ^ indent ^ "[@@expect.uncaught_exn " ^ literal ^ "]"
                       else literal
                     in
                     [ c.payload_start, c.payload_end, literal ]
@@ -190,22 +214,18 @@ let write ~root corrections =
                     in
                     let literal =
                       render_literal
-                        ~column:(column_of source c.payload_start + String.length opening)
+                        ~indent:(padding_to source c.payload_start ^ spaces opening)
                         ~actual:c.actual
                     in
                     [ c.payload_start, c.payload_end, opening ^ literal ^ closing ]
                 | Replace s -> [ c.payload_start, c.payload_end, s ]
-                | New_expect { indent_pos; parens } -> (
-                    let indent = indentation_of source indent_pos in
+                | New_expect { indent_pos; test_start; parens } -> (
+                    let indent = statement_indentation source ~test_start indent_pos in
                     let opening = "[%expect " in
                     let literal =
-                      render_literal
-                        ~column:(indent + String.length opening)
-                        ~actual:c.actual
+                      render_literal ~indent:(indent ^ spaces opening) ~actual:c.actual
                     in
-                    let expect =
-                      Printf.sprintf ";\n%s%s%s]" (String.make indent ' ') opening literal
-                    in
+                    let expect = Printf.sprintf ";\n%s%s%s]" indent opening literal in
                     let insert pos s = pos, pos, s in
                     (* Insertions at the same offset stay in list order. *)
                     match parens with

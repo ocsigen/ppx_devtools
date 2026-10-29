@@ -144,4 +144,25 @@ let%expect_test "reached [@when] [%expect.unreachable]" =
   [%expect.unreachable] [@when ocaml_version >= (4, 0, 0)];
   [%expect {| default |}]
 
+let%expect_test "trailing output, one-line body" = print_string "trailing"
+
+module Nested = struct
+  let%expect_test "uncaught exception, nested" =
+    print_string "trailing";
+    raise Exit
+end
+
+[@@@ocamlformat "disable"]
+
+(* Indented with tabs. *)
+module Tabs = struct
+	let%expect_test "trailing output, tabs" =
+		print_string "checked";
+		[%expect {|
+		  stale 1
+		  stale 2 |}];
+		print_string "line 1\nline 2"
+end
+[@@@ocamlformat "enable"]
+
 let () = Ppx_devtools_expect_runtime.exit ()

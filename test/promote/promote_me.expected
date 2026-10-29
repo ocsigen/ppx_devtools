@@ -108,12 +108,12 @@ let%expect_test "different outputs" =
     (fun s ->
       print_string s;
       [%expect {|
-               (* CR expect_test: Test ran multiple times with different test outputs *)
-               ============================= Output 1 / 3 ==============================
+               (* CR ppx_devtools-expect: this [%expect] saw different outputs *)
+               ========================== Output 1 / 3 ==========================
                a
-               ============================= Output 2 / 3 ==============================
+               ========================== Output 2 / 3 ==========================
                b
-               ============================= Output 3 / 3 ==============================
+               ========================== Output 3 / 3 ==========================
                a
                |}])
     [ "a"; "b"; "a" ]
@@ -169,5 +169,35 @@ let%expect_test "reached [@when] [%expect.unreachable]" =
   print_string "reached";
   [%expect ({| reached |} [@when ocaml_version >= (4, 0, 0)])];
   [%expect {| default |}]
+
+let%expect_test "trailing output, one-line body" = print_string "trailing";
+  [%expect {| trailing |}]
+
+module Nested = struct
+  let%expect_test "uncaught exception, nested" =
+    print_string "trailing";
+    raise Exit
+  [@@expect.uncaught_exn {|
+    Stdlib.Exit
+    Trailing output
+    ---------------
+    trailing
+    |}]
+end
+
+[@@@ocamlformat "disable"]
+
+(* Indented with tabs. *)
+module Tabs = struct
+	let%expect_test "trailing output, tabs" =
+		print_string "checked";
+		[%expect {| checked |}];
+		print_string "line 1\nline 2";
+		[%expect {|
+		         line 1
+		         line 2
+		         |}]
+end
+[@@@ocamlformat "enable"]
 
 let () = Ppx_devtools_expect_runtime.exit ()

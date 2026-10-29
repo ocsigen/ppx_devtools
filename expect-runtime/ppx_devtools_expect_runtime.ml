@@ -96,6 +96,7 @@ type test =
   ; condition : unit -> bool (* reified [@when] on the test; gates running *)
   ; expectations : variant array array
   ; body_end : int
+  ; test_start : int
   ; last_statement_start : int
   ; open_tail : (int * int) option
   ; uncaught_exn : uncaught_exn option
@@ -115,6 +116,7 @@ let register_test
     ~condition
     ~expectations
     ~body_end
+    ~test_start
     ~last_statement_start
     ~open_tail
     ~uncaught_exn
@@ -130,6 +132,7 @@ let register_test
     ; condition
     ; expectations
     ; body_end
+    ; test_start
     ; last_statement_start
     ; open_tail
     ; uncaught_exn
@@ -144,6 +147,7 @@ type run =
   ; expectations : variant array array
   ; filename : string
   ; description : string
+  ; test_start : int
   ; outputs : string list array (* per group, the output of each run, latest first *)
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
@@ -195,14 +199,13 @@ let check_unexpected r ~pos ~indent_pos ~parens actual =
       ; payload_start = pos
       ; payload_end = pos
       ; actual
-      ; kind = New_expect { indent_pos; parens }
+      ; kind = New_expect { indent_pos; test_start = r.test_start; parens }
       }
 
-(* Like ppx_expect, an assertion point that ran several times with different
-   outputs gets all of them under a CR, and keeps failing until it gives a
-   single output. *)
+(* An assertion point that ran several times with different outputs gets all
+   of them under a CR, and keeps failing until it gives a single output. *)
 let cr_for_multiple_outputs outputs =
-  let cr = "(* CR expect_test: Test ran multiple times with different test outputs *)" in
+  let cr = "(* CR ppx_devtools-expect: this [%expect] saw different outputs *)" in
   let n = List.length outputs in
   let header i =
     let header = Printf.sprintf "=== Output %d / %d ===" (i + 1) n in
@@ -303,7 +306,7 @@ let check_uncaught_exn r ~body_end ~expected exn trailing =
           ; payload_start
           ; payload_end
           ; actual
-          ; kind = Uncaught_exn
+          ; kind = Uncaught_exn { test_start = r.test_start }
           };
         if not (String.equal backtrace "")
         then r.reports <- ("  backtrace:\n" ^ backtrace) :: r.reports
@@ -650,6 +653,7 @@ let exit () =
           ; expectations = test.expectations
           ; filename = test.filename
           ; description = descr
+          ; test_start = test.test_start
           ; outputs = Array.make (Array.length test.expectations) []
           ; corrections = []
           ; reports = []

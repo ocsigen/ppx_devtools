@@ -87,6 +87,7 @@ val register_test :
   -> condition:(unit -> bool)
   -> expectations:variant array array
   -> body_end:int
+  -> test_start:int
   -> last_statement_start:int
   -> open_tail:(int * int) option
   -> uncaught_exn:uncaught_exn option
@@ -95,10 +96,10 @@ val register_test :
 (** Register an [let%expect_test]. [lib] is the library the test belongs to (so
     the runner can ignore tests from dependencies linked into it). [expectations]
     holds one group of [variant]s per assertion point (in source order);
-    [check ~index:k] refers to group [k]. [body_end] is the byte offset of
-    the end of the test body, and [last_statement_start] the one of the start
-    of its last statement: output printed after the last assertion point gets
-    a new [%expect] there. [open_tail] is the span of a [match] or [try] the
+    [check ~index:k] refers to group [k]. [test_start] is the byte offset of
+    the [let%expect_test], [body_end] the one of the end of the test body, and
+    [last_statement_start] the one of the start of its last statement: output
+    printed after the last assertion point gets a new [%expect] there. [open_tail] is the span of a [match] or [try] the
     body ends with, which is parenthesized before appending to it.
     [uncaught_exn] is the exception the test is expected to raise, if any. *)
 
