@@ -79,9 +79,10 @@ is not, promotion adds an `[%expect]` at the end of the test. As in
   the last assertion point, in a `[@@expect.uncaught_exn {| ... |}]` attribute
   on the test;
 - an `[%expect]` that is never reached becomes `[%expect.unreachable]`, which
-  fails when reached. In a group with `[@when]` variants, only the active
-  variant does, keeping its condition:
-  `([%expect.unreachable] [@when js])`;
+  fails when reached. In a group with `[@when]` variants, only the default
+  `[%expect]` does: the `[@when]` variants keep their snapshots, as the code
+  may be reached elsewhere. `[%expect.unreachable]` can itself be a `[@when]`
+  variant: `([%expect.unreachable] [@when js])`;
 - an assertion point that runs several times, for instance in a loop, must see
   the same output each time. Otherwise, promotion records every output under a
   CR comment, and the test keeps failing until it is fixed.

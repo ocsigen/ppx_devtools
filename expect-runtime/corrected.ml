@@ -26,10 +26,9 @@ type kind =
      span is empty. *)
   | Uncaught_exn
   (* Replace [payload_start, payload_end) (a whole [%expect] node) with a
-     new [%expect] holding [actual], or with an [%expect.unreachable]. Both
-     keep the [@when] predicate whose source is at [condition], if any. *)
+     new [%expect] holding [actual], keeping the [@when] predicate whose
+     source is at [condition], if any. *)
   | Expect_node of { condition : (int * int) option }
-  | Unreachable_node of { condition : (int * int) option }
   (* Replace [payload_start, payload_end) with the given text. *)
   | Replace of string
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
@@ -195,16 +194,6 @@ let write ~root corrections =
                         ~actual:c.actual
                     in
                     [ c.payload_start, c.payload_end, opening ^ literal ^ closing ]
-                | Unreachable_node { condition } ->
-                    let node =
-                      match condition with
-                      | None -> "[%expect.unreachable]"
-                      | Some (s, e) ->
-                          "([%expect.unreachable] [@when "
-                          ^ String.sub source s (e - s)
-                          ^ "])"
-                    in
-                    [ c.payload_start, c.payload_end, node ]
                 | Replace s -> [ c.payload_start, c.payload_end, s ]
                 | New_expect { indent_pos; parens } -> (
                     let indent = indentation_of source indent_pos in
