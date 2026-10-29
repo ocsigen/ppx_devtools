@@ -5,9 +5,4 @@ a
 b
   ---
 c
-FAILED: test/promote/disagree.ml:15 output before an exception
-  exception: Stdlib.Exit
-  output:
-printed before raising
-
-ppx_devtools-expect: FAILED 2 / 3 tests
+ppx_devtools-expect: FAILED 1 / 2 tests
