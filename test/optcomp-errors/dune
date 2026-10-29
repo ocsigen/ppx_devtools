@@ -15,9 +15,12 @@
    (setenv
     OCAML_ERROR_STYLE
     short
-    (with-outputs-to
-     %{targets}
-     (run ./pp.exe -impl expression.ml -o %{null}))))))
+    (setenv
+     OCAML_COLOR
+     never
+     (with-outputs-to
+      %{targets}
+      (run ./pp.exe -impl expression.ml -o %{null})))))))
 
 (rule
  (alias runtest)
@@ -33,9 +36,12 @@
    (setenv
     OCAML_ERROR_STYLE
     short
-    (with-outputs-to
-     %{targets}
-     (run ./pp.exe -impl local_binding.ml -o %{null}))))))
+    (setenv
+     OCAML_COLOR
+     never
+     (with-outputs-to
+      %{targets}
+      (run ./pp.exe -impl local_binding.ml -o %{null})))))))
 
 (rule
  (alias runtest)
@@ -51,9 +57,12 @@
    (setenv
     OCAML_ERROR_STYLE
     short
-    (with-outputs-to
-     %{targets}
-     (run ./pp.exe -impl class.ml -o %{null}))))))
+    (setenv
+     OCAML_COLOR
+     never
+     (with-outputs-to
+      %{targets}
+      (run ./pp.exe -impl class.ml -o %{null})))))))
 
 (rule
  (alias runtest)
@@ -69,9 +78,12 @@
    (setenv
     OCAML_ERROR_STYLE
     short
-    (with-outputs-to
-     %{targets}
-     (run ./pp.exe -impl nested_pattern.ml -o %{null}))))))
+    (setenv
+     OCAML_COLOR
+     never
+     (with-outputs-to
+      %{targets}
+      (run ./pp.exe -impl nested_pattern.ml -o %{null})))))))
 
 (rule
  (alias runtest)
@@ -87,9 +99,12 @@
    (setenv
     OCAML_ERROR_STYLE
     short
-    (with-outputs-to
-     %{targets}
-     (run ./pp.exe -intf include.mli -o %{null}))))))
+    (setenv
+     OCAML_COLOR
+     never
+     (with-outputs-to
+      %{targets}
+      (run ./pp.exe -intf include.mli -o %{null})))))))
 
 (rule
  (alias runtest)
