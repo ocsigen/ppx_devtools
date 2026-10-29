@@ -65,6 +65,7 @@ let tag_dropped = function
 
 type variant =
   { condition : unit -> bool
+  ; condition_span : (int * int) option
   ; is_default : bool
   ; expected : string
   ; line : int
@@ -217,7 +218,8 @@ let cr_for_multiple_outputs outputs =
 let check_group r group ~multiple actual =
   match select_variant group with
   | Some v when v.is_unreachable ->
-      (* A reached [%expect.unreachable] becomes a plain [%expect]. *)
+      (* A reached [%expect.unreachable] becomes an [%expect], under the same
+         condition. *)
       mismatch
         r
         ~expected:""
@@ -226,7 +228,7 @@ let check_group r group ~multiple actual =
         ; payload_start = v.expect_start
         ; payload_end = v.expect_end
         ; actual
-        ; kind = Expect_node
+        ; kind = Expect_node { condition = v.condition_span }
         }
   | Some v ->
       if
@@ -316,31 +318,31 @@ let check ~index =
       then r.outputs.(index) <- actual :: r.outputs.(index)
 
 (* Check the outputs recorded by each assertion point once the test is over.
-   As in ppx_expect, a plain [%expect] that was never reached becomes an
-   [%expect.unreachable]. A group with [@when] variants is left alone: it may
-   only be unreachable under some axes. *)
+   As in ppx_expect, an [%expect] that was never reached becomes an
+   [%expect.unreachable]. In a group, only the active variant does, keeping
+   its condition: the code may be reached under other axes. *)
 let check_groups r =
   Array.iteri
     (fun index group ->
       if Array.length group > 0
       then
         match List.rev r.outputs.(index) with
-        | [] ->
-            let v = group.(0) in
-            if Array.length group = 1 && v.is_default && not v.is_unreachable
-            then
-              report
-                r
-                { Corrected.filename = r.filename
-                ; payload_start = v.expect_start
-                ; payload_end = v.expect_end
-                ; actual = ""
-                ; kind = Replace "[%expect.unreachable]"
-                }
-                (Printf.sprintf
-                   "FAILED: %s\n  the [%%expect] at line %d was not reached\n"
-                   r.description
-                   v.line)
+        | [] -> (
+            match select_variant group with
+            | Some v when not v.is_unreachable ->
+                report
+                  r
+                  { Corrected.filename = r.filename
+                  ; payload_start = v.expect_start
+                  ; payload_end = v.expect_end
+                  ; actual = ""
+                  ; kind = Unreachable_node { condition = v.condition_span }
+                  }
+                  (Printf.sprintf
+                     "FAILED: %s\n  the [%%expect] at line %d was not reached\n"
+                     r.description
+                     v.line)
+            | Some _ | None -> ())
         | first :: _ as outputs ->
             let multiple =
               not
