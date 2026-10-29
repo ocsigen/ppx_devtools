@@ -53,12 +53,28 @@ end
 
 type variant =
   { condition : unit -> bool (* reified [%expect.when] predicate *)
+  ; condition_span : (int * int) option (* byte offsets of its source *)
   ; is_default : bool (* [true] for a plain [%expect] with no [.when] *)
   ; expected : string (* contents of the [{| ... |}] literal *)
+  ; line : int (* line of the [%expect] in the source *)
+  ; expect_start : int (* byte offset of the [%expect] node in the source *)
+  ; expect_end : int (* byte offset just past the [%expect] node *)
   ; payload_start : int (* byte offset of the literal token in the source *)
   ; payload_end : int (* byte offset just past the literal token *)
+  ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
+  ; is_unreachable : bool (* [%expect.unreachable] *)
   }
 (** One environment-specific variant of an [%expect] assertion point. *)
+
+type uncaught_exn =
+  { expected_exn : string (* contents of the literal *)
+  ; exn_payload_start : int (* byte offset of the literal token in the source *)
+  ; exn_payload_end : int (* byte offset just past the literal token *)
+  ; attribute_start : int (* byte offset of the attribute *)
+  ; attribute_end : int (* byte offset just past the attribute *)
+  }
+(** The [[@@expect.uncaught_exn {| ... |}]] attribute of a test: the exception
+    it is expected to raise. *)
 
 val register_test :
      lib:string
@@ -70,16 +86,27 @@ val register_test :
   -> tags:string list
   -> condition:(unit -> bool)
   -> expectations:variant array array
+  -> body_end:int
+  -> test_start:int
+  -> last_statement_start:int
+  -> open_tail:(int * int) option
+  -> uncaught_exn:uncaught_exn option
   -> (unit -> unit)
   -> unit
 (** Register an [let%expect_test]. [lib] is the library the test belongs to (so
     the runner can ignore tests from dependencies linked into it). [expectations]
     holds one group of [variant]s per assertion point (in source order);
-    [check ~index:k] refers to group [k]. *)
+    [check ~index:k] refers to group [k]. [test_start] is the byte offset of
+    the [let%expect_test], [body_end] the one of the end of the test body, and
+    [last_statement_start] the one of the start of its last statement: output
+    printed after the last assertion point gets a new [%expect] there. [open_tail] is the span of a [match] or [try] the
+    body ends with, which is parenthesized before appending to it.
+    [uncaught_exn] is the exception the test is expected to raise, if any. *)
 
 val check : index:int -> unit
-(** Called at each [%expect]/[%expect.when] point: compares the output captured
-    since the previous point against the active variant of group [index]. *)
+(** Called at each [%expect]/[%expect.when] point: records the output captured
+    since the previous point for group [index]. The outputs are checked
+    against the active variant of the group when the test ends. *)
 
 val read_output : unit -> string
 (** Called for [%expect.output]: returns (and consumes) the output captured

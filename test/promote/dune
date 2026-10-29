@@ -3,6 +3,7 @@
 
 (executable
  (name promote_me)
+ (modules promote_me)
  (preprocess
   (pps ppx_devtools-expect)))
 

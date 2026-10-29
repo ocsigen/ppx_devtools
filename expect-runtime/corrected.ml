@@ -14,14 +14,55 @@
 
 (* Produces the [<source>.corrected] files that dune diffs against the sources
    for promotion. Only the literal of the variant that actually mismatched is
-   rewritten; every other byte of the source (including the non-matching
-   [%expect.when] variants) is copied verbatim. *)
+   rewritten, or a new [%expect] inserted; every other byte of the source
+   (including the non-matching [%expect.when] variants) is copied verbatim. *)
+
+type kind =
+  (* Replace the literal in [payload_start, payload_end). A bare [%expect]
+     has an empty span, and gets a literal inserted. *)
+  | Literal
+  (* Replace the literal of an [[@@expect.uncaught_exn]] attribute in
+     [payload_start, payload_end), or insert a new attribute there when the
+     span is empty, indented like the test starting at [test_start]. *)
+  | Uncaught_exn of { test_start : int }
+  (* Replace [payload_start, payload_end) (a whole [%expect] node) with a
+     new [%expect] holding [actual], keeping the [@when] predicate whose
+     source is at [condition], if any. *)
+  | Expect_node of { condition : (int * int) option }
+  (* Replace [payload_start, payload_end) with the given text. *)
+  | Replace of string
+  (* Delete the attribute in [payload_start, payload_end), and the whitespace
+     in front of it. *)
+  | Delete_attribute
+  (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
+     like the line holding [indent_pos]. When that is the first line of the
+     test starting at [test_start], it is indented one step further. *)
+  | New_expect of
+      { indent_pos : int
+      ; test_start : int
+      ; parens : parens
+      }
+
+(* Parentheses needed for the [; [%expect ...]] appended by [New_expect] to be
+   a statement following the expression before it. *)
+and parens =
+  | No_parens
+  (* Parenthesize [\[start, stop)] (a [match] or [try] that would otherwise
+     extend over the new statement), unless it already is. *)
+  | Before of
+      { start : int
+      ; stop : int
+      }
+  (* Parenthesize from [start] through the new [%expect] (a lone expression,
+     not a statement of a sequence). *)
+  | Around of { start : int }
 
 type correction =
   { filename : string (* relative to the build context root (see [write]) *)
   ; payload_start : int (* byte offset of the start of the string literal token *)
   ; payload_end : int (* byte offset just past the literal token *)
   ; actual : string
+  ; kind : kind
   }
 
 let contains s sub =
@@ -35,11 +76,45 @@ let contains s sub =
   in
   loop 0
 
-let column_of source pos =
-  let rec line_start i =
-    if i <= 0 || Char.equal source.[i - 1] '\n' then i else line_start (i - 1)
+let line_start source pos =
+  let rec loop i = if i <= 0 || Char.equal source.[i - 1] '\n' then i else loop (i - 1) in
+  loop pos
+
+(* Whitespace lining up with [pos]: what precedes it on its line, with every
+   character but tabs turned into a space. *)
+let padding_to source pos =
+  let start = line_start source pos in
+  String.map
+    (fun c -> if Char.equal c '\t' then c else ' ')
+    (String.sub source start (pos - start))
+
+(* [source] has an already parenthesized expression at [pos]. *)
+let parenthesized source pos =
+  let has s =
+    pos + String.length s <= String.length source
+    && String.equal (String.sub source pos (String.length s)) s
   in
-  pos - line_start pos
+  has "(" || has "begin " || has "begin\n"
+
+(* Leading whitespace of the line holding [pos]. *)
+let indentation_of source pos =
+  let start = line_start source pos in
+  let len = String.length source in
+  let rec loop i =
+    if i < len && (Char.equal source.[i] ' ' || Char.equal source.[i] '\t')
+    then loop (i + 1)
+    else i
+  in
+  String.sub source start (loop start - start)
+
+(* Indentation of a statement following the one at [pos], in the test
+   starting at [test_start]. *)
+let statement_indentation source ~test_start pos =
+  if line_start source pos = line_start source test_start
+  then indentation_of source test_start ^ "  "
+  else indentation_of source pos
+
+let spaces s = String.make (String.length s) ' '
 
 (* Pick the shortest [{tag| ... |tag}] delimiter that does not clash with the
    body. [tag = ""] gives the usual [{| ... |}]. *)
@@ -47,7 +122,8 @@ let rec choose_tag body n =
   let tag = String.make n '_' in
   if contains body ("|" ^ tag ^ "}") then choose_tag body (n + 1) else tag
 
-let render_literal ~source ~payload_start ~actual =
+(* [indent] is the whitespace in front of the lines of a multi-line literal. *)
+let render_literal ~indent ~actual =
   let lines = Text.canonical_lines actual in
   let body = String.concat "\n" lines in
   let tag = choose_tag body 0 in
@@ -56,7 +132,6 @@ let render_literal ~source ~payload_start ~actual =
   | [] -> opening ^ " " ^ closing
   | [ single ] -> Printf.sprintf "%s %s %s" opening single closing
   | _ ->
-      let indent = String.make (column_of source payload_start) ' ' in
       let body =
         String.concat
           ""
@@ -105,21 +180,89 @@ let write ~root corrections =
             filename
       | Some source ->
           let edits =
-            List.map
+            List.concat_map
               (fun c ->
-                let literal =
-                  render_literal ~source ~payload_start:c.payload_start ~actual:c.actual
-                in
-                (* A bare [%expect] has no literal to replace (the span is
-                   empty); the literal is inserted, so add the leading space
-                   that a written-out [%expect {| ... |}] would have. *)
-                let literal =
-                  if c.payload_start = c.payload_end then " " ^ literal else literal
-                in
-                c.payload_start, c.payload_end, literal)
+                match c.kind with
+                | Literal ->
+                    let literal =
+                      render_literal
+                        ~indent:(padding_to source c.payload_start)
+                        ~actual:c.actual
+                    in
+                    (* A bare [%expect] has no literal to replace (the span is
+                       empty); the literal is inserted, so add the leading
+                       space that a written-out [%expect {| ... |}] would
+                       have. *)
+                    let literal =
+                      if c.payload_start = c.payload_end then " " ^ literal else literal
+                    in
+                    [ c.payload_start, c.payload_end, literal ]
+                | Uncaught_exn { test_start } ->
+                    let indent = indentation_of source test_start in
+                    let literal =
+                      render_literal ~indent:(indent ^ "  ") ~actual:c.actual
+                    in
+                    let literal =
+                      if c.payload_start = c.payload_end
+                      then "\n" ^ indent ^ "[@@expect.uncaught_exn " ^ literal ^ "]"
+                      else literal
+                    in
+                    [ c.payload_start, c.payload_end, literal ]
+                | Expect_node { condition } ->
+                    let opening, closing =
+                      match condition with
+                      | None -> "[%expect ", "]"
+                      | Some (s, e) ->
+                          "[%expect (", " [@when " ^ String.sub source s (e - s) ^ "])]"
+                    in
+                    let literal =
+                      render_literal
+                        ~indent:(padding_to source c.payload_start ^ spaces opening)
+                        ~actual:c.actual
+                    in
+                    [ c.payload_start, c.payload_end, opening ^ literal ^ closing ]
+                | Replace s -> [ c.payload_start, c.payload_end, s ]
+                | Delete_attribute ->
+                    let rec start i =
+                      if
+                        i > 0
+                        &&
+                        match source.[i - 1] with
+                        | ' ' | '\t' | '\n' | '\r' -> true
+                        | _ -> false
+                      then start (i - 1)
+                      else i
+                    in
+                    [ start c.payload_start, c.payload_end, "" ]
+                | New_expect { indent_pos; test_start; parens } -> (
+                    let indent = statement_indentation source ~test_start indent_pos in
+                    let opening = "[%expect " in
+                    let literal =
+                      render_literal ~indent:(indent ^ spaces opening) ~actual:c.actual
+                    in
+                    let expect = Printf.sprintf ";\n%s%s%s]" indent opening literal in
+                    let insert pos s = pos, pos, s in
+                    (* Insertions at the same offset stay in list order. *)
+                    match parens with
+                    | No_parens -> [ insert c.payload_start expect ]
+                    | Before { start; stop } ->
+                        if parenthesized source start
+                        then [ insert c.payload_start expect ]
+                        else
+                          [ insert start "("
+                          ; insert stop ")"
+                          ; insert c.payload_start expect
+                          ]
+                    | Around { start } ->
+                        [ insert start "("; insert c.payload_start (expect ^ ")") ]))
               cs
           in
-          let edits = List.sort (fun (a, _, _) (b, _, _) -> compare (a : int) b) edits in
+          let edits =
+            (* An insertion at the start of a deletion goes first. *)
+            List.stable_sort
+              (fun (s, e, _) (s', e', _) -> compare (s, e : int * int) (s', e'))
+              edits
+          in
           let buf = Buffer.create (String.length source + 256) in
           let pos = ref 0 in
           List.iter

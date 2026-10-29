@@ -33,6 +33,8 @@
       into a runtime test against {!Ppx_devtools_expect_runtime.Axes}. Further axes
       can be added with {!register_axes}. A plain
       [%expect] (no [\[@when\]]) is the default variant of its group.
+    - [%expect.unreachable] into an assertion point that fails when reached. It
+      can be a conditional variant: [([%expect.unreachable] \[@when COND\])].
     - [%expect.output] into [Ppx_devtools_expect_runtime.read_output ()], returning
       the output captured since the previous assertion point. *)
 
@@ -46,9 +48,15 @@ let runtime = "Ppx_devtools_expect_runtime"
 type variant =
   { is_default : bool
   ; condition : expression option (* reified [@when] predicate, [bool]-valued *)
+  ; condition_span : (int * int) option (* source of the [@when] predicate *)
   ; expected : string
+  ; line : int
+  ; expect_start : int
+  ; expect_end : int
   ; payload_start : int
   ; payload_end : int
+  ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
+  ; is_unreachable : bool (* [%expect.unreachable] *)
   }
 
 let invalid ~loc fmt = Location.raise_errorf ~loc fmt
@@ -77,7 +85,8 @@ let register_axes f = resolvers := f :: !resolvers
 let resolve name = List.find_map !resolvers ~f:(fun f -> f name)
 
 (* Pull the optional [@when COND] off the literal (or off the [Pstr_eval] item)
-   and reify it into a [bool] expression evaluated against the runtime axes. *)
+   and reify it into a [bool] expression evaluated against the runtime axes.
+   Also returns the locations of [COND] and of the attribute. *)
 let when_condition ~expr_attrs ~eval_attrs =
   let find attrs =
     List.find_opt attrs ~f:(fun (a : attribute) -> String.equal a.attr_name.txt "when")
@@ -107,10 +116,15 @@ let when_condition ~expr_attrs ~eval_attrs =
             ~loc
             "[@when] predicate uses an unknown axis or is not meaningful at runtime"
       in
-      Some e
+      Some (e, cond.pexp_loc, attr.attr_loc)
+
+let span (loc : location) = loc.loc_start.pos_cnum, loc.loc_end.pos_cnum
 
 (* Parse the payload of an [%expect ...] node into a {!variant}. *)
 let variant_of_payload ~ext_loc (payload : payload) : variant =
+  let line = ext_loc.loc_start.pos_lnum in
+  let expect_start = ext_loc.loc_start.pos_cnum in
+  let expect_end = ext_loc.loc_end.pos_cnum in
   match payload with
   | PStr [] ->
       (* Bare [%expect]: no literal yet. Promotion will insert one just before
@@ -118,9 +132,15 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
       let p = ext_loc.loc_end.pos_cnum - 1 in
       { is_default = true
       ; condition = None
+      ; condition_span = None
       ; expected = ""
+      ; line
+      ; expect_start
+      ; expect_end
       ; payload_start = p
       ; payload_end = p
+      ; in_sequence = true
+      ; is_unreachable = false
       }
   | PStr [ { pstr_desc = Pstr_eval (lit, eval_attrs); _ } ] -> (
       match lit.pexp_desc with
@@ -136,10 +156,16 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
             | Some d -> String.length d + 2
           in
           { is_default = Option.is_none condition
-          ; condition
+          ; condition = Option.map (fun (e, _, _) -> e) condition
+          ; condition_span = Option.map (fun (_, l, _) -> span l) condition
           ; expected = s
+          ; line
+          ; expect_start
+          ; expect_end
           ; payload_start = str_loc.loc_start.pos_cnum - delim_len
           ; payload_end = str_loc.loc_end.pos_cnum + delim_len
+          ; in_sequence = true
+          ; is_unreachable = false
           }
       | _ -> invalid ~loc:lit.pexp_loc "[%%expect] expects a string literal payload")
   | _ -> invalid ~loc:ext_loc "[%%expect] expects a string literal payload"
@@ -153,6 +179,25 @@ let classify (e : expression) : point =
   match e.pexp_desc with
   | Pexp_extension ({ txt = "expect"; _ }, payload) ->
       Expect (variant_of_payload ~ext_loc:e.pexp_loc payload)
+  | Pexp_extension ({ txt = "expect.unreachable"; loc }, payload) -> (
+      match payload with
+      | PStr [] ->
+          (* [([%expect.unreachable] [@when COND])] is a conditional variant.
+             Without the parentheses, the node ends with the attribute. *)
+          let v = variant_of_payload ~ext_loc:e.pexp_loc payload in
+          let condition = when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[] in
+          Expect
+            { v with
+              is_unreachable = true
+            ; is_default = Option.is_none condition
+            ; condition = Option.map (fun (e, _, _) -> e) condition
+            ; condition_span = Option.map (fun (_, l, _) -> span l) condition
+            ; expect_end =
+                (match condition with
+                | None -> v.expect_end
+                | Some (_, _, attr_loc) -> max v.expect_end attr_loc.loc_end.pos_cnum)
+            }
+      | _ -> invalid ~loc "[%%expect.unreachable] does not take a payload")
   | Pexp_extension ({ txt = "expect.output"; loc }, payload) -> (
       match payload with
       | PStr [] -> Output
@@ -203,7 +248,7 @@ let transform_body (body : expression) : expression * variant list array =
             match classify e with
             | Expect v ->
                 let loc = e.pexp_loc in
-                check ~loc (alloc_group [ v ])
+                check ~loc (alloc_group [ { v with in_sequence = false } ])
             | Output ->
                 let loc = e.pexp_loc in
                 [%expr [%e Ast_builder.Default.evar ~loc (runtime ^ ".read_output")] ()]
@@ -245,10 +290,24 @@ let evariant ~loc (v : variant) : expression =
   in
   [%expr
     { Ppx_devtools_expect_runtime.condition = [%e condition]
+    ; condition_span =
+        [%e
+          match v.condition_span with
+          | None -> [%expr None]
+          | Some (s, e) ->
+              [%expr
+                Some
+                  ( [%e Ast_builder.Default.eint ~loc s]
+                  , [%e Ast_builder.Default.eint ~loc e] )]]
     ; is_default = [%e Ast_builder.Default.ebool ~loc v.is_default]
     ; expected = [%e estring ~loc v.expected]
+    ; line = [%e Ast_builder.Default.eint ~loc v.line]
+    ; expect_start = [%e Ast_builder.Default.eint ~loc v.expect_start]
+    ; expect_end = [%e Ast_builder.Default.eint ~loc v.expect_end]
     ; payload_start = [%e Ast_builder.Default.eint ~loc v.payload_start]
     ; payload_end = [%e Ast_builder.Default.eint ~loc v.payload_end]
+    ; in_sequence = [%e Ast_builder.Default.ebool ~loc v.in_sequence]
+    ; is_unreachable = [%e Ast_builder.Default.ebool ~loc v.is_unreachable]
     }]
 
 let eexpectations ~loc (groups : variant list array) : expression =
@@ -323,7 +382,42 @@ let () =
       | Some name -> library_name := name
       | None -> ())
 
-let expand_test ~loc (vb : value_binding) : structure_item =
+(* [@@expect.uncaught_exn {| ... |}] on the test: the exception it is expected
+   to raise. *)
+let uncaught_exn_of_attributes ~loc (attrs : attribute list) : expression =
+  match
+    List.find_opt attrs ~f:(fun (a : attribute) ->
+        String.equal a.attr_name.txt "expect.uncaught_exn")
+  with
+  | None -> [%expr None]
+  | Some attr -> (
+      Attribute.mark_as_handled_manually attr;
+      match attr.attr_payload with
+      | PStr
+          [ { pstr_desc =
+                Pstr_eval
+                  ({ pexp_desc = Pexp_constant (Pconst_string (s, str_loc, delim)); _ }, _)
+            ; _
+            }
+          ] ->
+          let delim_len =
+            match delim with
+            | None -> 1
+            | Some d -> String.length d + 2
+          in
+          let eint = Ast_builder.Default.eint ~loc in
+          [%expr
+            Some
+              { Ppx_devtools_expect_runtime.expected_exn = [%e estring ~loc s]
+              ; exn_payload_start = [%e eint (str_loc.loc_start.pos_cnum - delim_len)]
+              ; exn_payload_end = [%e eint (str_loc.loc_end.pos_cnum + delim_len)]
+              ; attribute_start = [%e eint attr.attr_loc.loc_start.pos_cnum]
+              ; attribute_end = [%e eint attr.attr_loc.loc_end.pos_cnum]
+              }]
+      | _ -> invalid ~loc:attr.attr_loc "[@@expect.uncaught_exn] expects a string literal"
+      )
+
+let expand_test ~loc ~item_attributes (vb : value_binding) : structure_item =
   let description, tags =
     match vb.pvb_pat.ppat_desc with
     | Ppat_constant (Pconst_string (s, _, _)) ->
@@ -338,6 +432,46 @@ let expand_test ~loc (vb : value_binding) : structure_item =
      so the [-verbose] location reads identically. *)
   let start_pos = pos.pos_cnum - pos.pos_bol in
   let end_pos = vb.pvb_loc.loc_end.pos_cnum - pos.pos_bol in
+  let body_end = vb.pvb_expr.pexp_loc.loc_end.pos_cnum in
+  let last_statement_start =
+    (List.hd (List.rev (flatten_seq vb.pvb_expr))).pexp_loc.loc_start.pos_cnum
+  in
+  (* A [match], [try] or [function] ending the body, possibly as the last
+     argument of an application (e.g. [print_string @@ match ...]), would
+     capture a statement appended after it into its last case: promotion
+     parenthesizes it first. *)
+  let open_tail =
+    let rec find (e : expression) =
+      match e.pexp_desc with
+      | Pexp_match _ | Pexp_try _ | Pexp_function _ -> Some e.pexp_loc
+      | Pexp_apply (_, args) -> (
+          match List.rev args with
+          | (_, e) :: _ -> find e
+          | [] -> None)
+      | Pexp_sequence (_, e)
+      | Pexp_construct (_, Some e)
+      | Pexp_variant (_, Some e)
+      | Pexp_setfield (_, _, e)
+      | Pexp_let (_, _, e)
+      | Pexp_letmodule (_, _, e)
+      | Pexp_letexception (_, e)
+      | Pexp_open (_, e)
+      | Pexp_letop { body = e; _ }
+      | Pexp_ifthenelse (_, _, Some e)
+      | Pexp_ifthenelse (_, e, None) -> find e
+      | _ -> None
+    in
+    match find vb.pvb_expr with
+    | None -> [%expr None]
+    | Some l ->
+        [%expr
+          Some
+            ( [%e Ast_builder.Default.eint ~loc l.loc_start.pos_cnum]
+            , [%e Ast_builder.Default.eint ~loc l.loc_end.pos_cnum] )]
+  in
+  let uncaught_exn =
+    uncaught_exn_of_attributes ~loc (vb.pvb_attributes @ item_attributes)
+  in
   let body, groups = transform_body vb.pvb_expr in
   let expectations = eexpectations ~loc groups in
   let tags = Ast_builder.Default.elist ~loc (List.map tags ~f:(estring ~loc)) in
@@ -358,6 +492,11 @@ let expand_test ~loc (vb : value_binding) : structure_item =
         ~tags:[%e tags]
         ~condition:[%e condition]
         ~expectations:[%e expectations]
+        ~body_end:[%e Ast_builder.Default.eint ~loc body_end]
+        ~test_start:[%e Ast_builder.Default.eint ~loc loc.loc_start.pos_cnum]
+        ~last_statement_start:[%e Ast_builder.Default.eint ~loc last_statement_start]
+        ~open_tail:[%e open_tail]
+        ~uncaught_exn:[%e uncaught_exn]
         (fun () -> [%e body])]
 
 let impl_mapper =
@@ -366,10 +505,10 @@ let impl_mapper =
 
     method! structure_item item =
       match item.pstr_desc with
-      | Pstr_extension (({ txt = "expect_test"; _ }, payload), _) -> (
+      | Pstr_extension (({ txt = "expect_test"; _ }, payload), item_attributes) -> (
           match payload with
           | PStr [ { pstr_desc = Pstr_value (Nonrecursive, [ vb ]); _ } ] ->
-              expand_test ~loc:item.pstr_loc vb
+              expand_test ~loc:item.pstr_loc ~item_attributes vb
           | _ -> invalid ~loc:item.pstr_loc "let%%expect_test expects a single binding")
       | _ -> super#structure_item item
   end

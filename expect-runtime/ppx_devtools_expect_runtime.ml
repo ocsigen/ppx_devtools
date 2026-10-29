@@ -65,10 +65,24 @@ let tag_dropped = function
 
 type variant =
   { condition : unit -> bool
+  ; condition_span : (int * int) option
   ; is_default : bool
   ; expected : string
+  ; line : int
+  ; expect_start : int
+  ; expect_end : int
   ; payload_start : int
   ; payload_end : int
+  ; in_sequence : bool
+  ; is_unreachable : bool
+  }
+
+type uncaught_exn =
+  { expected_exn : string
+  ; exn_payload_start : int
+  ; exn_payload_end : int
+  ; attribute_start : int
+  ; attribute_end : int
   }
 
 type test =
@@ -81,6 +95,11 @@ type test =
   ; tags : string list
   ; condition : unit -> bool (* reified [@when] on the test; gates running *)
   ; expectations : variant array array
+  ; body_end : int
+  ; test_start : int
+  ; last_statement_start : int
+  ; open_tail : (int * int) option
+  ; uncaught_exn : uncaught_exn option
   ; body : unit -> unit
   }
 
@@ -96,6 +115,11 @@ let register_test
     ~tags
     ~condition
     ~expectations
+    ~body_end
+    ~test_start
+    ~last_statement_start
+    ~open_tail
+    ~uncaught_exn
     body =
   tests :=
     { lib
@@ -107,6 +131,11 @@ let register_test
     ; tags
     ; condition
     ; expectations
+    ; body_end
+    ; test_start
+    ; last_statement_start
+    ; open_tail
+    ; uncaught_exn
     ; body
     }
     :: !tests
@@ -118,6 +147,8 @@ type run =
   ; expectations : variant array array
   ; filename : string
   ; description : string
+  ; test_start : int
+  ; outputs : string list array (* per group, the output of each run, latest first *)
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
   }
@@ -125,7 +156,7 @@ type run =
 let current : run option ref = ref None
 
 (* Pick the active variant of a group: the first conditional variant whose
-   predicate holds, otherwise the default one (a plain [%expect]). *)
+   predicate holds, otherwise the default one (a plain [%expect]), if any. *)
 let select_variant group =
   let n = Array.length group in
   let rec find i =
@@ -136,43 +167,202 @@ let select_variant group =
       if (not v.is_default) && v.condition () then Some v else find (i + 1)
   in
   match find 0 with
-  | Some v -> v
+  | Some v -> Some v
   | None ->
       let rec find_default i =
         if i >= n
-        then group.(0)
+        then None
         else if group.(i).is_default
-        then group.(i)
+        then Some group.(i)
         else find_default (i + 1)
       in
       find_default 0
+
+let report r correction report =
+  r.corrections <- correction :: r.corrections;
+  r.reports <- report :: r.reports
+
+let mismatch r ~expected ~actual correction =
+  r.corrections <- correction :: r.corrections;
+  r.reports <- Diff.make ~description:r.description ~expected ~actual :: r.reports
+
+(* Output that no [%expect] accounts for is expected to be empty. On a
+   mismatch, a new [%expect] is inserted at [pos]. *)
+let check_unexpected r ~pos ~indent_pos ~parens actual =
+  if not (String.equal (Text.normalize actual) "")
+  then
+    mismatch
+      r
+      ~expected:""
+      ~actual
+      { Corrected.filename = r.filename
+      ; payload_start = pos
+      ; payload_end = pos
+      ; actual
+      ; kind = New_expect { indent_pos; test_start = r.test_start; parens }
+      }
+
+(* An assertion point that ran several times with different outputs gets all
+   of them under a CR, and keeps failing until it gives a single output. *)
+let cr_for_multiple_outputs outputs =
+  let cr = "(* CR ppx_devtools-expect: this [%expect] saw different outputs *)" in
+  let n = List.length outputs in
+  let header i =
+    let header = Printf.sprintf "=== Output %d / %d ===" (i + 1) n in
+    let pad = String.length cr - String.length header in
+    if pad <= 0
+    then header
+    else String.make (pad / 2) '=' ^ header ^ String.make (pad - (pad / 2)) '='
+  in
+  String.concat
+    "\n"
+    (cr :: List.concat (List.mapi (fun i o -> [ header i; Text.normalize o ]) outputs))
+
+let check_group r group ~multiple actual =
+  match select_variant group with
+  | Some v when v.is_unreachable ->
+      (* A reached [%expect.unreachable] becomes an [%expect], under the same
+         condition. *)
+      mismatch
+        r
+        ~expected:""
+        ~actual
+        { Corrected.filename = r.filename
+        ; payload_start = v.expect_start
+        ; payload_end = v.expect_end
+        ; actual
+        ; kind = Expect_node { condition = v.condition_span }
+        }
+  | Some v ->
+      if
+        multiple || not (String.equal (Text.normalize actual) (Text.normalize v.expected))
+      then
+        mismatch
+          r
+          ~expected:v.expected
+          ~actual
+          { Corrected.filename = r.filename
+          ; payload_start = v.payload_start
+          ; payload_end = v.payload_end
+          ; actual
+          ; kind = Literal
+          }
+  | None ->
+      (* No default variant, and no condition holds: insert a default
+         [%expect] after the last variant of the group. Outside of a sequence
+         (e.g. [if c then [%expect ...] else ...]), the two are parenthesized
+         into one. *)
+      let last = group.(Array.length group - 1) in
+      check_unexpected
+        r
+        ~pos:last.expect_end
+        ~indent_pos:last.expect_start
+        ~parens:
+          (if last.in_sequence
+           then Corrected.No_parens
+           else Around { start = group.(0).expect_start })
+        actual
+
+(* Like ppx_expect, an exception escaping the test is a snapshot, recorded in a
+   [[@@expect.uncaught_exn]] attribute together with the output printed after
+   the last [%expect]. The attribute is inserted at the end of the body when
+   missing, and deleted when the test no longer raises. *)
+let check_uncaught_exn r ~body_end ~expected exn trailing =
+  match exn, expected with
+  | None, None -> ()
+  | None, Some u ->
+      mismatch
+        r
+        ~expected:u.expected_exn
+        ~actual:""
+        { Corrected.filename = r.filename
+        ; payload_start = u.attribute_start
+        ; payload_end = u.attribute_end
+        ; actual = ""
+        ; kind = Delete_attribute
+        }
+  | Some (e, backtrace), _ ->
+      let actual =
+        String.concat
+          "\n"
+          (Printexc.to_string e
+          ::
+          (if String.equal (Text.normalize trailing) ""
+           then []
+           else [ "Trailing output"; "---------------"; trailing ]))
+      in
+      let expected, payload_start, payload_end =
+        match expected with
+        | None -> "", body_end, body_end
+        | Some u -> u.expected_exn, u.exn_payload_start, u.exn_payload_end
+      in
+      if not (String.equal (Text.normalize actual) (Text.normalize expected))
+      then begin
+        mismatch
+          r
+          ~expected
+          ~actual
+          { Corrected.filename = r.filename
+          ; payload_start
+          ; payload_end
+          ; actual
+          ; kind = Uncaught_exn { test_start = r.test_start }
+          };
+        if not (String.equal backtrace "")
+        then r.reports <- ("  backtrace:\n" ^ backtrace) :: r.reports
+      end
 
 let check ~index =
   match !current with
   | None -> ()
   | Some r ->
       let actual = Capture.read r.cap in
-      if index >= 0 && index < Array.length r.expectations
-      then begin
-        let group = r.expectations.(index) in
-        if Array.length group > 0
-        then begin
-          let v = select_variant group in
-          if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
-          then begin
-            r.corrections <-
-              { Corrected.filename = r.filename
-              ; payload_start = v.payload_start
-              ; payload_end = v.payload_end
-              ; actual
-              }
-              :: r.corrections;
-            r.reports <-
-              Diff.make ~description:r.description ~expected:v.expected ~actual
-              :: r.reports
-          end
-        end
-      end
+      if index >= 0 && index < Array.length r.outputs
+      then r.outputs.(index) <- actual :: r.outputs.(index)
+
+(* Check the outputs recorded by each assertion point once the test is over.
+   As in ppx_expect, an [%expect] that was never reached becomes an
+   [%expect.unreachable]. In a group, only the default variant does: the
+   [@when] variants keep their snapshots, as the code may be reached under
+   other axes. *)
+let check_groups r =
+  Array.iteri
+    (fun index group ->
+      if Array.length group > 0
+      then
+        match List.rev r.outputs.(index) with
+        | [] -> (
+            let default =
+              Array.fold_left
+                (fun acc v -> if v.is_default then Some v else acc)
+                None
+                group
+            in
+            match default with
+            | Some v when not v.is_unreachable ->
+                report
+                  r
+                  { Corrected.filename = r.filename
+                  ; payload_start = v.expect_start
+                  ; payload_end = v.expect_end
+                  ; actual = ""
+                  ; kind = Replace "[%expect.unreachable]"
+                  }
+                  (Printf.sprintf
+                     "FAILED: %s\n  the [%%expect] at line %d was not reached\n"
+                     r.description
+                     v.line)
+            | Some _ | None -> ())
+        | first :: _ as outputs ->
+            let multiple =
+              not
+                (List.for_all
+                   (fun o -> String.equal (Text.normalize o) (Text.normalize first))
+                   outputs)
+            in
+            let actual = if multiple then cr_for_multiple_outputs outputs else first in
+            check_group r group ~multiple actual)
+    r.expectations
 
 let read_output () =
   match !current with
@@ -409,7 +599,8 @@ let exit () =
      [.corrected] files and lets dune diff them against the sources and drive
      promotion: an expect mismatch is therefore NOT a runner failure. Run
      standalone (no [-diff-cmd -]), the runner prints the diffs itself and fails
-     on any mismatch. Runtime exceptions always fail the runner. *)
+     on any mismatch. An exception escaping a test is a mismatch too, against
+     its [[@@expect.uncaught_exn]] attribute. *)
   let dune_mode =
     match cfg.diff_cmd with
     | Some "-" -> true
@@ -417,7 +608,6 @@ let exit () =
   in
   let all_corrections = ref [] in
   let mismatches = ref 0 in
-  let errors = ref 0 in
   let ran = ref 0 in
   (* Like ppx_inline_test, hold failure reports until the end in verbose mode so
      they don't interleave with the per-test progress lines on stdout. *)
@@ -463,6 +653,8 @@ let exit () =
           ; expectations = test.expectations
           ; filename = test.filename
           ; description = descr
+          ; test_start = test.test_start
+          ; outputs = Array.make (Array.length test.expectations) []
           ; corrections = []
           ; reports = []
           }
@@ -475,25 +667,37 @@ let exit () =
           | exception e -> Some (e, Printexc.get_backtrace ())
         in
         let elapsed = Sys.time () -. t0 in
+        check_groups r;
+        (* Output printed after the last assertion point: when the test
+           completes, it gets a new [%expect] at the end of the body. When it
+           raises, it goes with the exception. *)
+        let trailing = Capture.read cap in
+        check_uncaught_exn
+          r
+          ~body_end:test.body_end
+          ~expected:test.uncaught_exn
+          exn
+          trailing;
+        if Option.is_none exn
+        then
+          check_unexpected
+            r
+            ~pos:test.body_end
+            ~indent_pos:test.last_statement_start
+            ~parens:
+              (match test.open_tail with
+              | None -> Corrected.No_parens
+              | Some (start, stop) -> Before { start; stop })
+            trailing;
         current := None;
         Capture.stop cap;
         if cfg.verbose then Printf.printf " (%.3f sec)\n%!" elapsed;
-        (match r.corrections with
+        match r.corrections with
         | [] -> ()
         | corrections ->
             incr mismatches;
             all_corrections := List.rev_append corrections !all_corrections;
-            if not dune_mode then List.iter report (List.rev r.reports));
-        match exn with
-        | None -> ()
-        | Some (e, bt) ->
-            incr errors;
-            report
-              (Printf.sprintf
-                 "FAILED: %s\n  exception: %s\n%s\n"
-                 descr
-                 (Printexc.to_string e)
-                 bt)
+            if not dune_mode then List.iter report (List.rev r.reports)
       end)
     (List.rev !tests);
   (match List.rev !delayed with
@@ -503,7 +707,7 @@ let exit () =
       List.iter (fun s -> output_string stderr s) reports);
   let unreadable = Corrected.write ~root:cfg.source_tree_root !all_corrections in
   flush stderr;
-  let failed = if dune_mode then !errors else !mismatches + !errors in
+  let failed = if dune_mode then 0 else !mismatches in
   if failed > 0
   then Printf.eprintf "ppx_devtools-expect: FAILED %d / %d tests\n%!" failed !ran;
   if failed > 0 || unreadable > 0 then Stdlib.exit 2;

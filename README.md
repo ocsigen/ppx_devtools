@@ -82,10 +82,27 @@ let%expect_test "addition" =
 point. `[%expect.output]` returns it as a string instead. When the output does
 not match, `dune promote` updates the test.
 
+Output printed after the last assertion point is expected to be empty: when it
+is not, promotion adds an `[%expect]` at the end of the test. As in
+`ppx_expect`:
+
+- an exception escaping the test is recorded, with the output printed after
+  the last assertion point, in a `[@@expect.uncaught_exn {| ... |}]` attribute
+  on the test;
+- an `[%expect]` that is never reached becomes `[%expect.unreachable]`, which
+  fails when reached. In a group with `[@when]` variants, only the default
+  `[%expect]` does: the `[@when]` variants keep their snapshots, as the code
+  may be reached elsewhere. `[%expect.unreachable]` can itself be a `[@when]`
+  variant: `([%expect.unreachable] [@when js])`;
+- an assertion point that runs several times, for instance in a loop, must see
+  the same output each time. Otherwise, promotion records every output under a
+  CR comment, and the test keeps failing until it is fixed.
+
 ### Conditional snapshots and tests
 
 A `[@when COND]` attribute on an expectation makes it apply only when `COND`
-holds at runtime. The plain `[%expect]` of the group is the default:
+holds at runtime. The plain `[%expect]` of the group is the default; without
+one, the output is expected to be empty, and promotion adds it:
 
 ```ocaml
 let%expect_test "float32 marshalling" =
