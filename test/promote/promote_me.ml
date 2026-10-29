@@ -229,6 +229,13 @@ let%expect_test "different outputs, no variant applies" =
       [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])])
     [ "a"; "b" ]
 
+let%expect_test "trailing output, after a match in an application" =
+  print_string
+  @@
+  match Some 1 with
+  | Some _ -> "some"
+  | None -> "none"
+
 let%expect_test "trailing output, one-line body" = print_string "trailing"
 
 let%expect_test "trailing output, after an attribute" =
@@ -250,7 +257,18 @@ module Tabs = struct
 		  stale 1
 		  stale 2 |}];
 		print_string "line 1\nline 2"
+
+	let%expect_test "tabs and spaces in the output" =
+		print_string "\ta\n b";
+		[%expect {|
+			 a
+				b |}]
 end
+
+let%expect_test "uncaught exception, no longer raised, after an attribute" =
+  print_string "trailing"
+[@@ocaml.warning "-26"] (* kept *)
+[@@expect.uncaught_exn {| Stdlib.Exit |}]
 [@@@ocamlformat "enable"]
 
 let () = Ppx_devtools_expect_runtime.exit ()
