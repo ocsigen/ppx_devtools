@@ -60,6 +60,7 @@ type variant =
   ; expect_end : int (* byte offset just past the [%expect] node *)
   ; payload_start : int (* byte offset of the literal token in the source *)
   ; payload_end : int (* byte offset just past the literal token *)
+  ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
   }
 (** One environment-specific variant of an [%expect] assertion point. *)
 
@@ -75,6 +76,7 @@ val register_test :
   -> expectations:variant array array
   -> body_end:int
   -> last_statement_start:int
+  -> open_tail:(int * int) option
   -> (unit -> unit)
   -> unit
 (** Register an [let%expect_test]. [lib] is the library the test belongs to (so
@@ -83,7 +85,8 @@ val register_test :
     [check ~index:k] refers to group [k]. [body_end] is the byte offset of
     the end of the test body, and [last_statement_start] the one of the start
     of its last statement: output printed after the last assertion point gets
-    a new [%expect] there. *)
+    a new [%expect] there. [open_tail] is the span of a [match] or [try] the
+    body ends with, which is parenthesized before appending to it. *)
 
 val check : index:int -> unit
 (** Called at each [%expect]/[%expect.when] point: compares the output captured

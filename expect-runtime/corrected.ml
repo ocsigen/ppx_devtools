@@ -23,7 +23,24 @@ type kind =
   | Literal
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
      like the line holding [indent_pos]. *)
-  | New_expect of { indent_pos : int }
+  | New_expect of
+      { indent_pos : int
+      ; parens : parens
+      }
+
+(* Parentheses needed for the [; [%expect ...]] appended by [New_expect] to be
+   a statement following the expression before it. *)
+and parens =
+  | No_parens
+  (* Parenthesize [\[start, stop)] (a [match] or [try] that would otherwise
+     extend over the new statement), unless it already is. *)
+  | Before of
+      { start : int
+      ; stop : int
+      }
+  (* Parenthesize from [start] through the new [%expect] (a lone expression,
+     not a statement of a sequence). *)
+  | Around of { start : int }
 
 type correction =
   { filename : string (* relative to the build context root (see [write]) *)
@@ -49,6 +66,14 @@ let column_of source pos =
     if i <= 0 || Char.equal source.[i - 1] '\n' then i else line_start (i - 1)
   in
   pos - line_start pos
+
+(* [source] has an already parenthesized expression at [pos]. *)
+let parenthesized source pos =
+  let has s =
+    pos + String.length s <= String.length source
+    && String.equal (String.sub source pos (String.length s)) s
+  in
+  has "(" || has "begin " || has "begin\n"
 
 let indentation_of source pos =
   let start = pos - column_of source pos in
@@ -120,35 +145,53 @@ let write ~root corrections =
             filename
       | Some source ->
           let edits =
-            List.map
+            List.concat_map
               (fun c ->
-                let literal =
-                  match c.kind with
-                  | Literal ->
-                      let literal =
-                        render_literal
-                          ~column:(column_of source c.payload_start)
-                          ~actual:c.actual
-                      in
-                      (* A bare [%expect] has no literal to replace (the span
-                         is empty); the literal is inserted, so add the leading
-                         space that a written-out [%expect {| ... |}] would
-                         have. *)
+                match c.kind with
+                | Literal ->
+                    let literal =
+                      render_literal
+                        ~column:(column_of source c.payload_start)
+                        ~actual:c.actual
+                    in
+                    (* A bare [%expect] has no literal to replace (the span is
+                       empty); the literal is inserted, so add the leading
+                       space that a written-out [%expect {| ... |}] would
+                       have. *)
+                    let literal =
                       if c.payload_start = c.payload_end then " " ^ literal else literal
-                  | New_expect { indent_pos } ->
-                      let indent = indentation_of source indent_pos in
-                      let opening = "[%expect " in
-                      let literal =
-                        render_literal
-                          ~column:(indent + String.length opening)
-                          ~actual:c.actual
-                      in
+                    in
+                    [ c.payload_start, c.payload_end, literal ]
+                | New_expect { indent_pos; parens } -> (
+                    let indent = indentation_of source indent_pos in
+                    let opening = "[%expect " in
+                    let literal =
+                      render_literal
+                        ~column:(indent + String.length opening)
+                        ~actual:c.actual
+                    in
+                    let expect =
                       Printf.sprintf ";\n%s%s%s]" (String.make indent ' ') opening literal
-                in
-                c.payload_start, c.payload_end, literal)
+                    in
+                    let insert pos s = pos, pos, s in
+                    (* Insertions at the same offset stay in list order. *)
+                    match parens with
+                    | No_parens -> [ insert c.payload_start expect ]
+                    | Before { start; stop } ->
+                        if parenthesized source start
+                        then [ insert c.payload_start expect ]
+                        else
+                          [ insert start "("
+                          ; insert stop ")"
+                          ; insert c.payload_start expect
+                          ]
+                    | Around { start } ->
+                        [ insert start "("; insert c.payload_start (expect ^ ")") ]))
               cs
           in
-          let edits = List.sort (fun (a, _, _) (b, _, _) -> compare (a : int) b) edits in
+          let edits =
+            List.stable_sort (fun (a, _, _) (b, _, _) -> compare (a : int) b) edits
+          in
           let buf = Buffer.create (String.length source + 256) in
           let pos = ref 0 in
           List.iter

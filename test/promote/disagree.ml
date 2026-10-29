@@ -12,4 +12,8 @@ let%expect_test "agreeing runs" =
       [%expect {| a |}])
     [ "a"; "a" ]
 
+let%expect_test "output before an exception" =
+  print_string "printed before raising";
+  raise_notrace Exit
+
 let () = Ppx_devtools_expect_runtime.exit ()
