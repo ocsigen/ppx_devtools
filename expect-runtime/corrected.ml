@@ -21,6 +21,12 @@ type kind =
   (* Replace the literal in [payload_start, payload_end). A bare [%expect]
      has an empty span, and gets a literal inserted. *)
   | Literal
+  (* Replace the literal of an [[@@expect.uncaught_exn]] attribute in
+     [payload_start, payload_end), or insert a new attribute there when the
+     span is empty. *)
+  | Uncaught_exn
+  (* Delete [payload_start, payload_end). *)
+  | Delete
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
      like the line holding [indent_pos]. *)
   | New_expect of
@@ -162,6 +168,16 @@ let write ~root corrections =
                       if c.payload_start = c.payload_end then " " ^ literal else literal
                     in
                     [ c.payload_start, c.payload_end, literal ]
+                | Uncaught_exn ->
+                    (* Laid out like ppx_expect does. *)
+                    let literal = render_literal ~column:2 ~actual:c.actual in
+                    let literal =
+                      if c.payload_start = c.payload_end
+                      then "\n[@@expect.uncaught_exn " ^ literal ^ "]"
+                      else literal
+                    in
+                    [ c.payload_start, c.payload_end, literal ]
+                | Delete -> [ c.payload_start, c.payload_end, "" ]
                 | New_expect { indent_pos; parens } -> (
                     let indent = indentation_of source indent_pos in
                     let opening = "[%expect " in
@@ -190,7 +206,10 @@ let write ~root corrections =
               cs
           in
           let edits =
-            List.stable_sort (fun (a, _, _) (b, _, _) -> compare (a : int) b) edits
+            (* An insertion at the start of a deletion goes first. *)
+            List.stable_sort
+              (fun (s, e, _) (s', e', _) -> compare (s, e : int * int) (s', e'))
+              edits
           in
           let buf = Buffer.create (String.length source + 256) in
           let pos = ref 0 in
