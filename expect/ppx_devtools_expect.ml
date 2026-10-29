@@ -342,7 +342,43 @@ let () =
       | Some name -> library_name := name
       | None -> ())
 
-let expand_test ~loc (vb : value_binding) : structure_item =
+(* [@@expect.uncaught_exn {| ... |}] on the test: the exception it is expected
+   to raise, as in ppx_expect. Its span starts at [body_end] so that deleting
+   it also deletes the whitespace in front of it. *)
+let uncaught_exn_of_attributes ~loc ~body_end (attrs : attribute list) : expression =
+  match
+    List.find_opt attrs ~f:(fun (a : attribute) ->
+        String.equal a.attr_name.txt "expect.uncaught_exn")
+  with
+  | None -> [%expr None]
+  | Some attr -> (
+      Attribute.mark_as_handled_manually attr;
+      match attr.attr_payload with
+      | PStr
+          [ { pstr_desc =
+                Pstr_eval
+                  ({ pexp_desc = Pexp_constant (Pconst_string (s, str_loc, delim)); _ }, _)
+            ; _
+            }
+          ] ->
+          let delim_len =
+            match delim with
+            | None -> 1
+            | Some d -> String.length d + 2
+          in
+          let eint = Ast_builder.Default.eint ~loc in
+          [%expr
+            Some
+              { Ppx_devtools_expect_runtime.expected_exn = [%e estring ~loc s]
+              ; exn_payload_start = [%e eint (str_loc.loc_start.pos_cnum - delim_len)]
+              ; exn_payload_end = [%e eint (str_loc.loc_end.pos_cnum + delim_len)]
+              ; attribute_start = [%e eint body_end]
+              ; attribute_end = [%e eint attr.attr_loc.loc_end.pos_cnum]
+              }]
+      | _ -> invalid ~loc:attr.attr_loc "[@@expect.uncaught_exn] expects a string literal"
+      )
+
+let expand_test ~loc ~item_attributes (vb : value_binding) : structure_item =
   let description, tags =
     match vb.pvb_pat.ppat_desc with
     | Ppat_constant (Pconst_string (s, _, _)) ->
@@ -385,6 +421,9 @@ let expand_test ~loc (vb : value_binding) : structure_item =
             ( [%e Ast_builder.Default.eint ~loc l.loc_start.pos_cnum]
             , [%e Ast_builder.Default.eint ~loc l.loc_end.pos_cnum] )]
   in
+  let uncaught_exn =
+    uncaught_exn_of_attributes ~loc ~body_end (vb.pvb_attributes @ item_attributes)
+  in
   let body, groups = transform_body vb.pvb_expr in
   let expectations = eexpectations ~loc groups in
   let tags = Ast_builder.Default.elist ~loc (List.map tags ~f:(estring ~loc)) in
@@ -408,6 +447,7 @@ let expand_test ~loc (vb : value_binding) : structure_item =
         ~body_end:[%e Ast_builder.Default.eint ~loc body_end]
         ~last_statement_start:[%e Ast_builder.Default.eint ~loc last_statement_start]
         ~open_tail:[%e open_tail]
+        ~uncaught_exn:[%e uncaught_exn]
         (fun () -> [%e body])]
 
 let impl_mapper =
@@ -416,10 +456,10 @@ let impl_mapper =
 
     method! structure_item item =
       match item.pstr_desc with
-      | Pstr_extension (({ txt = "expect_test"; _ }, payload), _) -> (
+      | Pstr_extension (({ txt = "expect_test"; _ }, payload), item_attributes) -> (
           match payload with
           | PStr [ { pstr_desc = Pstr_value (Nonrecursive, [ vb ]); _ } ] ->
-              expand_test ~loc:item.pstr_loc vb
+              expand_test ~loc:item.pstr_loc ~item_attributes vb
           | _ -> invalid ~loc:item.pstr_loc "let%%expect_test expects a single binding")
       | _ -> super#structure_item item
   end

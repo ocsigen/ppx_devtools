@@ -2,9 +2,4 @@ FAILED: test/promote/disagree.ml:1 disagreeing runs
   the [%expect] at line 5 ran several times with different outputs:
 -a
 +b
-FAILED: test/promote/disagree.ml:15 output before an exception
-  exception: Stdlib.Exit
-  output:
-printed before raising
-
-ppx_devtools-expect: FAILED 2 / 3 tests
+ppx_devtools-expect: FAILED 1 / 2 tests

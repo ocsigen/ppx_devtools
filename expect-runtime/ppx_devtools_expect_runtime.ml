@@ -75,6 +75,14 @@ type variant =
   ; in_sequence : bool
   }
 
+type uncaught_exn =
+  { expected_exn : string
+  ; exn_payload_start : int
+  ; exn_payload_end : int
+  ; attribute_start : int
+  ; attribute_end : int
+  }
+
 type test =
   { lib : string
   ; filename : string
@@ -88,6 +96,7 @@ type test =
   ; body_end : int
   ; last_statement_start : int
   ; open_tail : (int * int) option
+  ; uncaught_exn : uncaught_exn option
   ; body : unit -> unit
   }
 
@@ -106,6 +115,7 @@ let register_test
     ~body_end
     ~last_statement_start
     ~open_tail
+    ~uncaught_exn
     body =
   tests :=
     { lib
@@ -120,6 +130,7 @@ let register_test
     ; body_end
     ; last_statement_start
     ; open_tail
+    ; uncaught_exn
     ; body
     }
     :: !tests
@@ -213,6 +224,55 @@ let check_group r group actual =
            then Corrected.No_parens
            else Around { start = group.(0).expect_start })
         actual
+
+(* Like ppx_expect, an exception escaping the test is a snapshot, recorded in a
+   [[@@expect.uncaught_exn]] attribute together with the output printed after
+   the last [%expect]. The attribute is inserted at the end of the body when
+   missing, and deleted when the test no longer raises. *)
+let check_uncaught_exn r ~body_end ~expected exn trailing =
+  match exn, expected with
+  | None, None -> ()
+  | None, Some u ->
+      mismatch
+        r
+        ~expected:u.expected_exn
+        ~actual:""
+        { Corrected.filename = r.filename
+        ; payload_start = u.attribute_start
+        ; payload_end = u.attribute_end
+        ; actual = ""
+        ; kind = Delete
+        }
+  | Some (e, backtrace), _ ->
+      let actual =
+        String.concat
+          "\n"
+          (Printexc.to_string e
+          ::
+          (if String.equal (Text.normalize trailing) ""
+           then []
+           else [ "Trailing output"; "---------------"; trailing ]))
+      in
+      let expected, payload_start, payload_end =
+        match expected with
+        | None -> "", body_end, body_end
+        | Some u -> u.expected_exn, u.exn_payload_start, u.exn_payload_end
+      in
+      if not (String.equal (Text.normalize actual) (Text.normalize expected))
+      then begin
+        mismatch
+          r
+          ~expected
+          ~actual
+          { Corrected.filename = r.filename
+          ; payload_start
+          ; payload_end
+          ; actual
+          ; kind = Uncaught_exn
+          };
+        if not (String.equal backtrace "")
+        then r.reports <- ("  backtrace:\n" ^ backtrace) :: r.reports
+      end
 
 let check ~index =
   match !current with
@@ -486,7 +546,8 @@ let exit () =
      [.corrected] files and lets dune diff them against the sources and drive
      promotion: an expect mismatch is therefore NOT a runner failure. Run
      standalone (no [-diff-cmd -]), the runner prints the diffs itself and fails
-     on any mismatch. Runtime exceptions always fail the runner. *)
+     on any mismatch. An exception escaping a test is a mismatch too, against
+     its [[@@expect.uncaught_exn]] attribute. *)
   let dune_mode =
     match cfg.diff_cmd with
     | Some "-" -> true
@@ -557,9 +618,14 @@ let exit () =
         let elapsed = Sys.time () -. t0 in
         (* Output printed after the last assertion point: when the test
            completes, it gets a new [%expect] at the end of the body. When it
-           raises, there is no point to insert one at: the output goes with
-           the exception in the failure report. *)
+           raises, it goes with the exception. *)
         let trailing = Capture.read cap in
+        check_uncaught_exn
+          r
+          ~body_end:test.body_end
+          ~expected:test.uncaught_exn
+          exn
+          trailing;
         if Option.is_none exn
         then
           check_unexpected
@@ -581,22 +647,7 @@ let exit () =
             all_corrections := List.rev_append corrections !all_corrections;
             if not dune_mode then List.iter report (List.rev r.reports));
         List.iter report (List.rev r.errors);
-        (match exn with
-        | None -> ()
-        | Some (e, bt) ->
-            let output =
-              if String.equal (Text.normalize trailing) ""
-              then ""
-              else Printf.sprintf "  output:\n%s\n" trailing
-            in
-            report
-              (Printf.sprintf
-                 "FAILED: %s\n  exception: %s\n%s%s\n"
-                 descr
-                 (Printexc.to_string e)
-                 output
-                 bt));
-        if Option.is_some exn || r.errors <> [] then incr errors
+        if r.errors <> [] then incr errors
       end)
     (List.rev !tests);
   (match List.rev !delayed with

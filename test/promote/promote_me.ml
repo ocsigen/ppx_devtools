@@ -66,4 +66,23 @@ let%expect_test "no default variant, in if-then" =
   print_string "actual";
   if true then [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])]
 
+let%expect_test "uncaught exception" =
+  print_string "checked";
+  [%expect {| checked |}];
+  print_string "trailing";
+  failwith "boom"
+
+let%expect_test "uncaught exception, no trailing output" = raise Exit
+
+let%expect_test "uncaught exception, stale" = raise Exit
+[@@expect.uncaught_exn {| Not_found |}]
+
+let%expect_test "uncaught exception, as expected" = raise Exit
+[@@expect.uncaught_exn {| Stdlib.Exit |}]
+
+let%expect_test "uncaught exception, no longer raised" =
+  print_string "trailing";
+  print_newline ()
+[@@expect.uncaught_exn {| Stdlib.Exit |}]
+
 let () = Ppx_devtools_expect_runtime.exit ()
