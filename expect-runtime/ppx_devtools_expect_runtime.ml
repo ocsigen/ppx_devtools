@@ -131,8 +131,7 @@ type run =
   ; expectations : variant array array
   ; filename : string
   ; description : string
-  ; seen : (int, string) Hashtbl.t (* output of the first run of each assertion point *)
-  ; mutable disagreeing : int list (* assertion points already reported *)
+  ; outputs : string list array (* per group, the distinct normalized outputs *)
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
   ; mutable errors : string list (* failures, even when promoting *)
@@ -218,38 +217,35 @@ let check ~index =
   match !current with
   | None -> ()
   | Some r ->
-      let actual = Capture.read r.cap in
-      if index >= 0 && index < Array.length r.expectations
-      then begin
-        let group = r.expectations.(index) in
-        if Array.length group > 0
-        then
-          match Hashtbl.find_opt r.seen index with
-          | None ->
-              Hashtbl.add r.seen index actual;
-              check_group r group actual
-          | Some first ->
-              (* The assertion point runs again (e.g. in a loop): its output
-                 must not change, as a single snapshot cannot record both. *)
-              if
-                (not (String.equal (Text.normalize first) (Text.normalize actual)))
-                && not (List.mem index r.disagreeing)
-              then begin
-                r.disagreeing <- index :: r.disagreeing;
-                r.errors <-
-                  Diff.make
-                    ~description:
-                      (Printf.sprintf
-                         "%s\n\
-                         \  the [%%expect] at line %d ran several times with different \
-                          outputs:"
-                         r.description
-                         group.(0).line)
-                    ~expected:first
-                    ~actual
-                  :: r.errors
-              end
-      end
+      let actual = Text.normalize (Capture.read r.cap) in
+      if
+        index >= 0
+        && index < Array.length r.outputs
+        && not (List.exists (String.equal actual) r.outputs.(index))
+      then r.outputs.(index) <- actual :: r.outputs.(index)
+
+(* Check the outputs recorded by each assertion point once the test is over.
+   An assertion point that ran several times (e.g. in a loop) must have given
+   the same output each time, as a single snapshot cannot record several. *)
+let check_groups r =
+  Array.iteri
+    (fun index group ->
+      if Array.length group > 0
+      then
+        match List.sort String.compare r.outputs.(index) with
+        | [] -> ()
+        | [ actual ] -> check_group r group actual
+        | outputs ->
+            r.errors <-
+              Printf.sprintf
+                "FAILED: %s\n\
+                \  the [%%expect] at line %d ran several times with different outputs:\n\
+                 %s\n"
+                r.description
+                group.(0).line
+                (String.concat "\n  ---\n" outputs)
+              :: r.errors)
+    r.expectations
 
 let read_output () =
   match !current with
@@ -540,8 +536,7 @@ let exit () =
           ; expectations = test.expectations
           ; filename = test.filename
           ; description = descr
-          ; seen = Hashtbl.create 8
-          ; disagreeing = []
+          ; outputs = Array.make (Array.length test.expectations) []
           ; corrections = []
           ; reports = []
           ; errors = []
@@ -555,6 +550,7 @@ let exit () =
           | exception e -> Some (e, Printexc.get_backtrace ())
         in
         let elapsed = Sys.time () -. t0 in
+        check_groups r;
         (* Output printed after the last assertion point: when the test
            completes, it gets a new [%expect] at the end of the body. When it
            raises, there is no point to insert one at: the output goes with

@@ -114,7 +114,7 @@ let when_condition ~expr_attrs ~eval_attrs =
       Some e
 
 (* Parse the payload of an [%expect ...] node into a {!variant}. *)
-let variant_of_payload ~ext_loc (payload : payload) : variant =
+let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
   let line = ext_loc.loc_start.pos_lnum in
   let expect_start = ext_loc.loc_start.pos_cnum in
   let expect_end = ext_loc.loc_end.pos_cnum in
@@ -131,7 +131,7 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
       ; expect_end
       ; payload_start = p
       ; payload_end = p
-      ; in_sequence = true
+      ; in_sequence
       }
   | PStr [ { pstr_desc = Pstr_eval (lit, eval_attrs); _ } ] -> (
       match lit.pexp_desc with
@@ -154,7 +154,7 @@ let variant_of_payload ~ext_loc (payload : payload) : variant =
           ; expect_end
           ; payload_start = str_loc.loc_start.pos_cnum - delim_len
           ; payload_end = str_loc.loc_end.pos_cnum + delim_len
-          ; in_sequence = true
+          ; in_sequence
           }
       | _ -> invalid ~loc:lit.pexp_loc "[%%expect] expects a string literal payload")
   | _ -> invalid ~loc:ext_loc "[%%expect] expects a string literal payload"
@@ -164,10 +164,11 @@ type point =
   | Output
   | Other
 
-let classify (e : expression) : point =
+(* [in_sequence]: [e] is a statement of a sequence, not a lone expression. *)
+let classify ~in_sequence (e : expression) : point =
   match e.pexp_desc with
   | Pexp_extension ({ txt = "expect"; _ }, payload) ->
-      Expect (variant_of_payload ~ext_loc:e.pexp_loc payload)
+      Expect (variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload)
   | Pexp_extension ({ txt = "expect.output"; loc }, payload) -> (
       match payload with
       | PStr [] -> Output
@@ -215,10 +216,10 @@ let transform_body (body : expression) : expression * variant list array =
         match e.pexp_desc with
         | Pexp_sequence _ -> self#sequence e
         | _ -> (
-            match classify e with
+            match classify ~in_sequence:false e with
             | Expect v ->
                 let loc = e.pexp_loc in
-                check ~loc (alloc_group [ { v with in_sequence = false } ])
+                check ~loc (alloc_group [ v ])
             | Output ->
                 let loc = e.pexp_loc in
                 [%expr [%e Ast_builder.Default.evar ~loc (runtime ^ ".read_output")] ()]
@@ -230,14 +231,14 @@ let transform_body (body : expression) : expression * variant list array =
         let rec go = function
           | [] -> []
           | stmt :: rest -> (
-              match classify stmt with
+              match classify ~in_sequence:true stmt with
               | Expect v ->
                   let run, rest = gather_run [ v ] rest in
                   check ~loc:stmt.pexp_loc (alloc_group run) :: go rest
               | Output | Other -> self#expression stmt :: go rest)
         and gather_run acc = function
           | stmt :: rest -> (
-              match classify stmt with
+              match classify ~in_sequence:true stmt with
               | Expect v -> gather_run (v :: acc) rest
               | Output | Other -> List.rev acc, stmt :: rest)
           | [] -> List.rev acc, []
@@ -342,6 +343,32 @@ let () =
       | Some name -> library_name := name
       | None -> ())
 
+(* The [match] or [try] that [e] ends with, if any. It would capture a
+   statement appended after [e] into its last case: promotion parenthesizes it
+   first. *)
+let rec open_tail (e : expression) : location option =
+  match e.pexp_desc with
+  | Pexp_match _ | Pexp_try _ -> Some e.pexp_loc
+  | Pexp_sequence (_, e)
+  | Pexp_letmodule (_, _, e)
+  | Pexp_letexception (_, e)
+  | Pexp_open (_, e)
+  | Pexp_letop { body = e; _ }
+  | Pexp_ifthenelse (_, _, Some e)
+  | Pexp_ifthenelse (_, e, None) -> open_tail e
+  | _ -> (
+      (* [Pexp_let] has an extra argument with OxCaml's ppxlib, but
+         [Ast_pattern.pexp_let] has the same shape everywhere. *)
+      match
+        Ast_pattern.parse_res
+          Ast_pattern.(pexp_let __ __ __)
+          e.pexp_loc
+          e
+          (fun _ _ body -> body)
+      with
+      | Ok body -> open_tail body
+      | Error _ -> None)
+
 let expand_test ~loc (vb : value_binding) : structure_item =
   let description, tags =
     match vb.pvb_pat.ppat_desc with
@@ -361,33 +388,8 @@ let expand_test ~loc (vb : value_binding) : structure_item =
   let last_statement_start =
     (List.hd (List.rev (flatten_seq vb.pvb_expr))).pexp_loc.loc_start.pos_cnum
   in
-  (* A [match] or [try] at the end of the body would capture a statement
-     appended after it into its last case: promotion parenthesizes it first. *)
   let open_tail =
-    let rec find (e : expression) =
-      match e.pexp_desc with
-      | Pexp_match _ | Pexp_try _ -> Some e.pexp_loc
-      | Pexp_sequence (_, e)
-      | Pexp_letmodule (_, _, e)
-      | Pexp_letexception (_, e)
-      | Pexp_open (_, e)
-      | Pexp_letop { body = e; _ }
-      | Pexp_ifthenelse (_, _, Some e)
-      | Pexp_ifthenelse (_, e, None) -> find e
-      | _ -> (
-          (* [Pexp_let] has an extra argument with OxCaml's ppxlib, but
-             [Ast_pattern.pexp_let] has the same shape everywhere. *)
-          match
-            Ast_pattern.parse_res
-              Ast_pattern.(pexp_let __ __ __)
-              e.pexp_loc
-              e
-              (fun _ _ body -> body)
-          with
-          | Ok body -> find body
-          | Error _ -> None)
-    in
-    match find vb.pvb_expr with
+    match open_tail vb.pvb_expr with
     | None -> [%expr None]
     | Some l ->
         [%expr
