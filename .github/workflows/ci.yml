@@ -31,7 +31,8 @@ jobs:
         ocaml-name:
           - ""
         include:
-          - os: ubuntu-latest
+          # OCaml 4.13 does not build with the GCC of more recent images
+          - os: ubuntu-24.04
             ocaml-compiler: "4.13"
           - os: ubuntu-latest
             ocaml-compiler: "5.1"
