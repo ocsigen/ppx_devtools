@@ -144,7 +144,7 @@ type run =
   ; expectations : variant array array
   ; filename : string
   ; description : string
-  ; outputs : string list array (* per group, the output of each run, latest first *)
+  ; outputs : string list array (* per group, the distinct normalized outputs *)
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
   }
@@ -199,8 +199,8 @@ let check_unexpected r ~pos ~indent_pos ~parens actual =
       }
 
 (* Like ppx_expect, an assertion point that ran several times with different
-   outputs gets all of them under a CR, and keeps failing until it gives a
-   single output. *)
+   outputs gets each distinct one under a CR, and keeps failing until it gives
+   a single output. *)
 let cr_for_multiple_outputs outputs =
   let cr = "(* CR expect_test: Test ran multiple times with different test outputs *)" in
   let n = List.length outputs in
@@ -211,9 +211,7 @@ let cr_for_multiple_outputs outputs =
     then header
     else String.make (pad / 2) '=' ^ header ^ String.make (pad - (pad / 2)) '='
   in
-  String.concat
-    "\n"
-    (cr :: List.concat (List.mapi (fun i o -> [ header i; Text.normalize o ]) outputs))
+  String.concat "\n" (cr :: List.concat (List.mapi (fun i o -> [ header i; o ]) outputs))
 
 let check_group r group ~multiple actual =
   match select_variant group with
@@ -313,8 +311,11 @@ let check ~index =
   match !current with
   | None -> ()
   | Some r ->
-      let actual = Capture.read r.cap in
-      if index >= 0 && index < Array.length r.outputs
+      let actual = Text.normalize (Capture.read r.cap) in
+      if
+        index >= 0
+        && index < Array.length r.outputs
+        && not (List.exists (String.equal actual) r.outputs.(index))
       then r.outputs.(index) <- actual :: r.outputs.(index)
 
 (* Check the outputs recorded by each assertion point once the test is over.
@@ -327,16 +328,14 @@ let check_groups r =
     (fun index group ->
       if Array.length group > 0
       then
-        match List.rev r.outputs.(index) with
+        match List.sort String.compare r.outputs.(index) with
         | [] -> (
-            let default =
-              Array.fold_left
-                (fun acc v -> if v.is_default then Some v else acc)
-                None
-                group
-            in
-            match default with
-            | Some v when not v.is_unreachable ->
+            (* Only the default is marked unreachable, and only when it is the
+               active variant: a [@when] variant, unreachable or not, may be
+               the one for this environment while the default is reached in
+               others. *)
+            match select_variant group with
+            | Some v when v.is_default && not v.is_unreachable ->
                 report
                   r
                   { Corrected.filename = r.filename
@@ -350,15 +349,8 @@ let check_groups r =
                      r.description
                      v.line)
             | Some _ | None -> ())
-        | first :: _ as outputs ->
-            let multiple =
-              not
-                (List.for_all
-                   (fun o -> String.equal (Text.normalize o) (Text.normalize first))
-                   outputs)
-            in
-            let actual = if multiple then cr_for_multiple_outputs outputs else first in
-            check_group r group ~multiple actual)
+        | [ actual ] -> check_group r group ~multiple:false actual
+        | outputs -> check_group r group ~multiple:true (cr_for_multiple_outputs outputs))
     r.expectations
 
 let read_output () =

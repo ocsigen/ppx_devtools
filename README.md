@@ -94,9 +94,11 @@ is not, promotion adds an `[%expect]` at the end of the test. As in
   on the test;
 - an `[%expect]` that is never reached becomes `[%expect.unreachable]`, which
   fails when reached. In a group with `[@when]` variants, only the default
-  `[%expect]` does: the `[@when]` variants keep their snapshots, as the code
-  may be reached elsewhere. `[%expect.unreachable]` can itself be a `[@when]`
-  variant: `([%expect.unreachable] [@when js])`;
+  `[%expect]` does, and only when no `[@when]` variant applies: the `[@when]`
+  variants keep their snapshots, as the code may be reached elsewhere. Code
+  reached on some backends only needs a `[@when]` variant, as promotion on
+  each backend would otherwise undo the other's:
+  `([%expect.unreachable] [@when native]); [%expect {| ... |}]`;
 - an assertion point that runs several times, for instance in a loop, must see
   the same output each time. Otherwise, promotion records every output under a
   CR comment, and the test keeps failing until it is fixed.

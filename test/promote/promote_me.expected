@@ -109,14 +109,12 @@ let%expect_test "different outputs" =
       print_string s;
       [%expect {|
                (* CR expect_test: Test ran multiple times with different test outputs *)
-               ============================= Output 1 / 3 ==============================
+               ============================= Output 1 / 2 ==============================
                a
-               ============================= Output 2 / 3 ==============================
+               ============================= Output 2 / 2 ==============================
                b
-               ============================= Output 3 / 3 ==============================
-               a
                |}])
-    [ "a"; "b"; "a" ]
+    [ "b"; "a"; "b" ]
 
 let%expect_test "same outputs" =
   List.iter
@@ -154,8 +152,18 @@ let%expect_test "unreached [@when] variant" =
   if false
   then begin
     print_string "unreached";
-    [%expect ({| unreached |} [@when ocaml_version >= (4, 0, 0)])];
+    [%expect ({| unreached |} [@when ocaml_version < (4, 0, 0)])];
     [%expect.unreachable]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "unreached group, [@when] variant active" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect.unreachable] [@when ocaml_version >= (4, 0, 0)];
+    [%expect {| reached elsewhere |}]
   end;
   print_string "reached";
   [%expect {| reached |}]
