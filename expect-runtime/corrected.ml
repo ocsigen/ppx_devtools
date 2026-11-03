@@ -15,7 +15,7 @@
 (* Produces the [<source>.corrected] files that dune diffs against the sources
    for promotion. Only the literal of the variant that actually mismatched is
    rewritten, or a new [%expect] inserted; every other byte of the source
-   (including the non-matching [%expect.when] variants) is copied verbatim. *)
+   (including the non-active [@when] variants) is copied verbatim. *)
 
 type kind =
   (* Replace the literal in [payload_start, payload_end). A bare [%expect]
