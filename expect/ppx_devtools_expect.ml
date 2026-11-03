@@ -368,14 +368,24 @@ let expand_test ~loc (vb : value_binding) : structure_item =
       match e.pexp_desc with
       | Pexp_match _ | Pexp_try _ -> Some e.pexp_loc
       | Pexp_sequence (_, e)
-      | Pexp_let (_, _, e)
       | Pexp_letmodule (_, _, e)
       | Pexp_letexception (_, e)
       | Pexp_open (_, e)
       | Pexp_letop { body = e; _ }
       | Pexp_ifthenelse (_, _, Some e)
       | Pexp_ifthenelse (_, e, None) -> find e
-      | _ -> None
+      | _ -> (
+          (* [Pexp_let] has an extra argument with OxCaml's ppxlib, but
+             [Ast_pattern.pexp_let] has the same shape everywhere. *)
+          match
+            Ast_pattern.parse_res
+              Ast_pattern.(pexp_let __ __ __)
+              e.pexp_loc
+              e
+              (fun _ _ body -> body)
+          with
+          | Ok body -> find body
+          | Error _ -> None)
     in
     match find vb.pvb_expr with
     | None -> [%expr None]
