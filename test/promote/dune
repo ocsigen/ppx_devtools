@@ -7,24 +7,34 @@
  (preprocess
   (pps ppx_devtools-expect)))
 
+; The runner fails, even under dune, on an [%expect] that saw different
+; outputs, as promotion does not fix it.
+
 (rule
- (targets promote_me.ml.corrected)
+ (targets promote_me.ml.corrected promote_me.stderr)
  (deps promote_me.ml)
  (action
-  (chdir
-   %{workspace_root}
-   (run
-    %{exe:promote_me.exe}
-    inline-test-runner
-    -source-tree-root
-    .
-    -diff-cmd
-    -))))
+  (with-accepted-exit-codes
+   2
+   (with-stderr-to
+    promote_me.stderr
+    (run
+     %{exe:promote_me.exe}
+     inline-test-runner
+     -source-tree-root
+     %{workspace_root}
+     -diff-cmd
+     -)))))
 
 (rule
  (alias runtest)
  (action
   (diff promote_me.expected promote_me.ml.corrected)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff promote_me.stderr.expected promote_me.stderr)))
 
 ; Mismatches must not be lost when the source cannot be read to write the
 ; [.corrected] file: the runner must fail.

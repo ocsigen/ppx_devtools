@@ -31,6 +31,8 @@ type kind =
   | Expect_node of { condition : (int * int) option }
   (* Replace [payload_start, payload_end) with the given text. *)
   | Replace of string
+  (* Delete [payload_start, payload_end). *)
+  | Delete
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
      like the line holding [indent_pos]. *)
   | New_expect of
@@ -195,6 +197,7 @@ let write ~root corrections =
                     in
                     [ c.payload_start, c.payload_end, opening ^ literal ^ closing ]
                 | Replace s -> [ c.payload_start, c.payload_end, s ]
+                | Delete -> [ c.payload_start, c.payload_end, "" ]
                 | New_expect { indent_pos; parens } -> (
                     let indent = indentation_of source indent_pos in
                     let opening = "[%expect " in

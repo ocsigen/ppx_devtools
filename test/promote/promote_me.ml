@@ -103,6 +103,8 @@ let%expect_test "reached [%expect.unreachable]" =
   print_string "reached";
   [%expect.unreachable]
 
+let%expect_test "reached [%expect.unreachable], no output" = [%expect.unreachable]
+
 let%expect_test "unreached [%expect.unreachable]" =
   if false then [%expect.unreachable];
   print_string "reached";

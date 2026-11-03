@@ -120,6 +120,19 @@ let when_condition ~expr_attrs ~eval_attrs =
 
 let span (loc : location) = loc.loc_start.pos_cnum, loc.loc_end.pos_cnum
 
+(* Make [v] conditional on the [@when] found by [when_condition], if any. The
+   node is extended over the attribute, which may follow it:
+   [[%expect.unreachable] [@when COND]]. *)
+let with_condition v = function
+  | None -> v
+  | Some (e, cond_loc, (attr_loc : location)) ->
+      { v with
+        is_default = false
+      ; condition = Some e
+      ; condition_span = Some (span cond_loc)
+      ; expect_end = max v.expect_end attr_loc.loc_end.pos_cnum
+      }
+
 (* Parse the payload of an [%expect ...] node into a {!variant}. *)
 let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
   let line = ext_loc.loc_start.pos_lnum in
@@ -155,18 +168,20 @@ let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
             | None -> 1
             | Some d -> String.length d + 2
           in
-          { is_default = Option.is_none condition
-          ; condition = Option.map (fun (e, _, _) -> e) condition
-          ; condition_span = Option.map (fun (_, l, _) -> span l) condition
-          ; expected = s
-          ; line
-          ; expect_start
-          ; expect_end
-          ; payload_start = str_loc.loc_start.pos_cnum - delim_len
-          ; payload_end = str_loc.loc_end.pos_cnum + delim_len
-          ; in_sequence
-          ; is_unreachable = false
-          }
+          with_condition
+            { is_default = true
+            ; condition = None
+            ; condition_span = None
+            ; expected = s
+            ; line
+            ; expect_start
+            ; expect_end
+            ; payload_start = str_loc.loc_start.pos_cnum - delim_len
+            ; payload_end = str_loc.loc_end.pos_cnum + delim_len
+            ; in_sequence
+            ; is_unreachable = false
+            }
+            condition
       | _ -> invalid ~loc:lit.pexp_loc "[%%expect] expects a string literal payload")
   | _ -> invalid ~loc:ext_loc "[%%expect] expects a string literal payload"
 
@@ -183,21 +198,12 @@ let classify ~in_sequence (e : expression) : point =
   | Pexp_extension ({ txt = "expect.unreachable"; loc }, payload) -> (
       match payload with
       | PStr [] ->
-          (* [([%expect.unreachable] [@when COND])] is a conditional variant.
-             Without the parentheses, the node ends with the attribute. *)
+          (* [([%expect.unreachable] [@when COND])] is a conditional variant. *)
           let v = variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload in
-          let condition = when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[] in
           Expect
-            { v with
-              is_unreachable = true
-            ; is_default = Option.is_none condition
-            ; condition = Option.map (fun (e, _, _) -> e) condition
-            ; condition_span = Option.map (fun (_, l, _) -> span l) condition
-            ; expect_end =
-                (match condition with
-                | None -> v.expect_end
-                | Some (_, _, attr_loc) -> max v.expect_end attr_loc.loc_end.pos_cnum)
-            }
+            (with_condition
+               { v with is_unreachable = true }
+               (when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[]))
       | _ -> invalid ~loc "[%%expect.unreachable] does not take a payload")
   | Pexp_extension ({ txt = "expect.output"; loc }, payload) -> (
       match payload with
