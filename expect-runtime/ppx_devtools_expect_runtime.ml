@@ -65,6 +65,7 @@ let tag_dropped = function
 
 type variant =
   { condition : unit -> bool
+  ; condition_span : (int * int) option
   ; is_default : bool
   ; expected : string
   ; line : int
@@ -73,6 +74,7 @@ type variant =
   ; payload_start : int
   ; payload_end : int
   ; in_sequence : bool
+  ; is_unreachable : bool
   }
 
 type uncaught_exn =
@@ -145,7 +147,8 @@ type run =
   ; outputs : string list array (* per group, the distinct normalized outputs *)
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
-  ; mutable errors : string list (* failures, even when promoting *)
+  ; mutable errors : string list
+        (* failures that promotion does not fix, reported even under dune *)
   }
 
 let current : run option ref = ref None
@@ -173,9 +176,12 @@ let select_variant group =
       in
       find_default 0
 
-let mismatch r ~expected ~actual correction =
+let report r correction message =
   r.corrections <- correction :: r.corrections;
-  r.reports <- Diff.make ~description:r.description ~expected ~actual :: r.reports
+  r.reports <- message :: r.reports
+
+let mismatch r ~expected ~actual correction =
+  report r correction (Diff.make ~description:r.description ~expected ~actual)
 
 (* Output that no [%expect] accounts for is expected to be empty. On a
    mismatch, a new [%expect] is inserted at [pos]. *)
@@ -193,10 +199,43 @@ let check_unexpected r ~pos ~indent_pos ~parens actual =
       ; kind = New_expect { indent_pos; parens }
       }
 
-let check_group r group actual =
+(* An assertion point that ran several times with different outputs gets each
+   distinct one under a CR (ppx_expect lists every run, repeats included). *)
+let cr_for_multiple_outputs outputs =
+  let cr = "(* CR expect_test: Test ran multiple times with different test outputs *)" in
+  let n = List.length outputs in
+  let header i =
+    let header = Printf.sprintf "=== Output %d / %d ===" (i + 1) n in
+    let pad = String.length cr - String.length header in
+    if pad <= 0
+    then header
+    else String.make (pad / 2) '=' ^ header ^ String.make (pad - (pad / 2)) '='
+  in
+  String.concat "\n" (cr :: List.concat (List.mapi (fun i o -> [ header i; o ]) outputs))
+
+let check_group r group ~multiple actual =
   match select_variant group with
+  | Some v when v.is_unreachable ->
+      (* A reached [%expect.unreachable] becomes an [%expect], under the same
+         condition. *)
+      report
+        r
+        { Corrected.filename = r.filename
+        ; payload_start = v.expect_start
+        ; payload_end = v.expect_end
+        ; actual
+        ; kind = Expect_node { condition = v.condition_span }
+        }
+        (if String.equal (Text.normalize actual) ""
+         then
+           Printf.sprintf
+             "FAILED: %s\n  the [%%expect.unreachable] at line %d was reached\n"
+             r.description
+             v.line
+         else Diff.make ~description:r.description ~expected:"" ~actual)
   | Some v ->
-      if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
+      if
+        multiple || not (String.equal (Text.normalize actual) (Text.normalize v.expected))
       then
         mismatch
           r
@@ -285,26 +324,47 @@ let check ~index =
       then r.outputs.(index) <- actual :: r.outputs.(index)
 
 (* Check the outputs recorded by each assertion point once the test is over.
-   An assertion point that ran several times (e.g. in a loop) must have given
-   the same output each time, as a single snapshot cannot record several. *)
+   As in ppx_expect, an [%expect] that was never reached becomes an
+   [%expect.unreachable]. In a group, only the default variant does: the
+   [@when] variants keep their snapshots, as the code may be reached under
+   other axes. *)
 let check_groups r =
   Array.iteri
     (fun index group ->
       if Array.length group > 0
       then
         match List.sort String.compare r.outputs.(index) with
-        | [] -> ()
-        | [ actual ] -> check_group r group actual
+        | [] -> (
+            (* Only the default is marked unreachable, and only when it is the
+               active variant: a [@when] variant, unreachable or not, may be
+               the one for this environment while the default is reached in
+               others. *)
+            match select_variant group with
+            | Some v when v.is_default && not v.is_unreachable ->
+                report
+                  r
+                  { Corrected.filename = r.filename
+                  ; payload_start = v.expect_start
+                  ; payload_end = v.expect_end
+                  ; actual = ""
+                  ; kind = Replace "[%expect.unreachable]"
+                  }
+                  (Printf.sprintf
+                     "FAILED: %s\n  the [%%expect] at line %d was not reached\n"
+                     r.description
+                     v.line)
+            | Some _ | None -> ())
+        | [ actual ] -> check_group r group ~multiple:false actual
         | outputs ->
+            (* Like ppx_expect, the test keeps failing until the outputs agree,
+               even once the CR is promoted. *)
             r.errors <-
               Printf.sprintf
-                "FAILED: %s\n\
-                \  the [%%expect] at line %d ran several times with different outputs:\n\
-                 %s\n"
+                "FAILED: %s\n  the [%%expect] at line %d saw different outputs\n"
                 r.description
                 group.(0).line
-                (String.concat "\n  ---\n" outputs)
-              :: r.errors)
+              :: r.errors;
+            check_group r group ~multiple:true (cr_for_multiple_outputs outputs))
     r.expectations
 
 let read_output () =
@@ -540,9 +600,9 @@ let exit () =
       Stdlib.exit 0);
   (* In [-diff-cmd -] mode (always passed by dune) the runner just writes the
      [.corrected] files and lets dune diff them against the sources and drive
-     promotion: an expect mismatch is therefore NOT a runner failure. Run
-     standalone (no [-diff-cmd -]), the runner prints the diffs itself and fails
-     on any mismatch. An exception escaping a test is a mismatch too, against
+     promotion: an expect mismatch is therefore NOT a runner failure, unless
+     promotion does not fix it ([r.errors]). Run standalone (no [-diff-cmd -]),
+     the runner prints the diffs itself and fails on any mismatch. An exception escaping a test is a mismatch too, against
      its [[@@expect.uncaught_exn]] attribute. *)
   let dune_mode =
     match cfg.diff_cmd with
@@ -551,7 +611,7 @@ let exit () =
   in
   let all_corrections = ref [] in
   let mismatches = ref 0 in
-  let errors = ref 0 in
+  let failures = ref 0 in
   let ran = ref 0 in
   (* Like ppx_inline_test, hold failure reports until the end in verbose mode so
      they don't interleave with the per-test progress lines on stdout. *)
@@ -642,8 +702,11 @@ let exit () =
             incr mismatches;
             all_corrections := List.rev_append corrections !all_corrections;
             if not dune_mode then List.iter report (List.rev r.reports));
-        List.iter report (List.rev r.errors);
-        if r.errors <> [] then incr errors
+        match r.errors with
+        | [] -> ()
+        | errors ->
+            incr failures;
+            if dune_mode then List.iter report (List.rev errors)
       end)
     (List.rev !tests);
   (match List.rev !delayed with
@@ -653,7 +716,7 @@ let exit () =
       List.iter (fun s -> output_string stderr s) reports);
   let unreadable = Corrected.write ~root:cfg.source_tree_root !all_corrections in
   flush stderr;
-  let failed = if dune_mode then !errors else !mismatches + !errors in
+  let failed = if dune_mode then !failures else !mismatches in
   if failed > 0
   then Printf.eprintf "ppx_devtools-expect: FAILED %d / %d tests\n%!" failed !ran;
   if failed > 0 || unreadable > 0 then Stdlib.exit 2;

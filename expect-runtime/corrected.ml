@@ -25,6 +25,12 @@ type kind =
      [payload_start, payload_end), or insert a new attribute there when the
      span is empty. *)
   | Uncaught_exn
+  (* Replace [payload_start, payload_end) (a whole [%expect] node) with a
+     new [%expect] holding [actual], keeping the [@when] predicate whose
+     source is at [condition], if any. *)
+  | Expect_node of { condition : (int * int) option }
+  (* Replace [payload_start, payload_end) with the given text. *)
+  | Replace of string
   (* Delete [payload_start, payload_end). *)
   | Delete
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
@@ -177,6 +183,20 @@ let write ~root corrections =
                       else literal
                     in
                     [ c.payload_start, c.payload_end, literal ]
+                | Expect_node { condition } ->
+                    let opening, closing =
+                      match condition with
+                      | None -> "[%expect ", "]"
+                      | Some (s, e) ->
+                          "[%expect (", " [@when " ^ String.sub source s (e - s) ^ "])]"
+                    in
+                    let literal =
+                      render_literal
+                        ~column:(column_of source c.payload_start + String.length opening)
+                        ~actual:c.actual
+                    in
+                    [ c.payload_start, c.payload_end, opening ^ literal ^ closing ]
+                | Replace s -> [ c.payload_start, c.payload_end, s ]
                 | Delete -> [ c.payload_start, c.payload_end, "" ]
                 | New_expect { indent_pos; parens } -> (
                     let indent = indentation_of source indent_pos in

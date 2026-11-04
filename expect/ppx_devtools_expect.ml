@@ -33,6 +33,8 @@
       into a runtime test against {!Ppx_devtools_expect_runtime.Axes}. Further axes
       can be added with {!register_axes}. A plain
       [%expect] (no [\[@when\]]) is the default variant of its group.
+    - [%expect.unreachable] into an assertion point that fails when reached. It
+      can be a conditional variant: [([%expect.unreachable] \[@when COND\])].
     - [%expect.output] into [Ppx_devtools_expect_runtime.read_output ()], returning
       the output captured since the previous assertion point. *)
 
@@ -46,6 +48,7 @@ let runtime = "Ppx_devtools_expect_runtime"
 type variant =
   { is_default : bool
   ; condition : expression option (* reified [@when] predicate, [bool]-valued *)
+  ; condition_span : (int * int) option (* source of the [@when] predicate *)
   ; expected : string
   ; line : int
   ; expect_start : int
@@ -53,6 +56,7 @@ type variant =
   ; payload_start : int
   ; payload_end : int
   ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
+  ; is_unreachable : bool (* [%expect.unreachable] *)
   }
 
 let invalid ~loc fmt = Location.raise_errorf ~loc fmt
@@ -81,7 +85,8 @@ let register_axes f = resolvers := f :: !resolvers
 let resolve name = List.find_map !resolvers ~f:(fun f -> f name)
 
 (* Pull the optional [@when COND] off the literal (or off the [Pstr_eval] item)
-   and reify it into a [bool] expression evaluated against the runtime axes. *)
+   and reify it into a [bool] expression evaluated against the runtime axes.
+   Also returns the locations of [COND] and of the attribute. *)
 let when_condition ~expr_attrs ~eval_attrs =
   let find attrs =
     List.find_opt attrs ~f:(fun (a : attribute) -> String.equal a.attr_name.txt "when")
@@ -111,7 +116,22 @@ let when_condition ~expr_attrs ~eval_attrs =
             ~loc
             "[@when] predicate uses an unknown axis or is not meaningful at runtime"
       in
-      Some e
+      Some (e, cond.pexp_loc, attr.attr_loc)
+
+let span (loc : location) = loc.loc_start.pos_cnum, loc.loc_end.pos_cnum
+
+(* Make [v] conditional on the [@when] found by [when_condition], if any. The
+   node is extended over the attribute, which may follow it:
+   [[%expect.unreachable] [@when COND]]. *)
+let with_condition v = function
+  | None -> v
+  | Some (e, cond_loc, (attr_loc : location)) ->
+      { v with
+        is_default = false
+      ; condition = Some e
+      ; condition_span = Some (span cond_loc)
+      ; expect_end = max v.expect_end attr_loc.loc_end.pos_cnum
+      }
 
 (* Parse the payload of an [%expect ...] node into a {!variant}. *)
 let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
@@ -125,6 +145,7 @@ let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
       let p = ext_loc.loc_end.pos_cnum - 1 in
       { is_default = true
       ; condition = None
+      ; condition_span = None
       ; expected = ""
       ; line
       ; expect_start
@@ -132,6 +153,7 @@ let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
       ; payload_start = p
       ; payload_end = p
       ; in_sequence
+      ; is_unreachable = false
       }
   | PStr [ { pstr_desc = Pstr_eval (lit, eval_attrs); _ } ] -> (
       match lit.pexp_desc with
@@ -146,16 +168,20 @@ let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
             | None -> 1
             | Some d -> String.length d + 2
           in
-          { is_default = Option.is_none condition
-          ; condition
-          ; expected = s
-          ; line
-          ; expect_start
-          ; expect_end
-          ; payload_start = str_loc.loc_start.pos_cnum - delim_len
-          ; payload_end = str_loc.loc_end.pos_cnum + delim_len
-          ; in_sequence
-          }
+          with_condition
+            { is_default = true
+            ; condition = None
+            ; condition_span = None
+            ; expected = s
+            ; line
+            ; expect_start
+            ; expect_end
+            ; payload_start = str_loc.loc_start.pos_cnum - delim_len
+            ; payload_end = str_loc.loc_end.pos_cnum + delim_len
+            ; in_sequence
+            ; is_unreachable = false
+            }
+            condition
       | _ -> invalid ~loc:lit.pexp_loc "[%%expect] expects a string literal payload")
   | _ -> invalid ~loc:ext_loc "[%%expect] expects a string literal payload"
 
@@ -169,6 +195,16 @@ let classify ~in_sequence (e : expression) : point =
   match e.pexp_desc with
   | Pexp_extension ({ txt = "expect"; _ }, payload) ->
       Expect (variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload)
+  | Pexp_extension ({ txt = "expect.unreachable"; loc }, payload) -> (
+      match payload with
+      | PStr [] ->
+          (* [([%expect.unreachable] [@when COND])] is a conditional variant. *)
+          let v = variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload in
+          Expect
+            (with_condition
+               { v with is_unreachable = true }
+               (when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[]))
+      | _ -> invalid ~loc "[%%expect.unreachable] does not take a payload")
   | Pexp_extension ({ txt = "expect.output"; loc }, payload) -> (
       match payload with
       | PStr [] -> Output
@@ -261,6 +297,15 @@ let evariant ~loc (v : variant) : expression =
   in
   [%expr
     { Ppx_devtools_expect_runtime.condition = [%e condition]
+    ; condition_span =
+        [%e
+          match v.condition_span with
+          | None -> [%expr None]
+          | Some (s, e) ->
+              [%expr
+                Some
+                  ( [%e Ast_builder.Default.eint ~loc s]
+                  , [%e Ast_builder.Default.eint ~loc e] )]]
     ; is_default = [%e Ast_builder.Default.ebool ~loc v.is_default]
     ; expected = [%e estring ~loc v.expected]
     ; line = [%e Ast_builder.Default.eint ~loc v.line]
@@ -269,6 +314,7 @@ let evariant ~loc (v : variant) : expression =
     ; payload_start = [%e Ast_builder.Default.eint ~loc v.payload_start]
     ; payload_end = [%e Ast_builder.Default.eint ~loc v.payload_end]
     ; in_sequence = [%e Ast_builder.Default.ebool ~loc v.in_sequence]
+    ; is_unreachable = [%e Ast_builder.Default.ebool ~loc v.is_unreachable]
     }]
 
 let eexpectations ~loc (groups : variant list array) : expression =
