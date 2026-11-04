@@ -389,13 +389,21 @@ let () =
       | Some name -> library_name := name
       | None -> ())
 
-(* The [match] or [try] that [e] ends with, if any. It would capture a
-   statement appended after [e] into its last case: promotion parenthesizes it
-   first. *)
+(* The [match], [try] or [function] that [e] ends with, if any, possibly as
+   the last argument of an application (e.g. [print_string @@ match ...]). It
+   would capture a statement appended after [e] into its last case: promotion
+   parenthesizes it first. *)
 let rec open_tail (e : expression) : location option =
   match e.pexp_desc with
-  | Pexp_match _ | Pexp_try _ -> Some e.pexp_loc
+  | Pexp_match _ | Pexp_try _ | Pexp_function _ -> Some e.pexp_loc
+  | Pexp_apply (_, args) -> (
+      match List.rev args with
+      | (_, e) :: _ -> open_tail e
+      | [] -> None)
   | Pexp_sequence (_, e)
+  | Pexp_construct (_, Some e)
+  | Pexp_variant (_, Some e)
+  | Pexp_setfield (_, _, e)
   | Pexp_letmodule (_, _, e)
   | Pexp_letexception (_, e)
   | Pexp_open (_, e)
@@ -416,9 +424,8 @@ let rec open_tail (e : expression) : location option =
       | Error _ -> None)
 
 (* [@@expect.uncaught_exn {| ... |}] on the test: the exception it is expected
-   to raise, as in ppx_expect. Its span starts at [body_end] so that deleting
-   it also deletes the whitespace in front of it. *)
-let uncaught_exn_of_attributes ~loc ~body_end (attrs : attribute list) : expression =
+   to raise. *)
+let uncaught_exn_of_attributes ~loc (attrs : attribute list) : expression =
   match
     List.find_opt attrs ~f:(fun (a : attribute) ->
         String.equal a.attr_name.txt "expect.uncaught_exn")
@@ -445,7 +452,7 @@ let uncaught_exn_of_attributes ~loc ~body_end (attrs : attribute list) : express
               { Ppx_devtools_expect_runtime.expected_exn = [%e estring ~loc s]
               ; exn_payload_start = [%e eint (str_loc.loc_start.pos_cnum - delim_len)]
               ; exn_payload_end = [%e eint (str_loc.loc_end.pos_cnum + delim_len)]
-              ; attribute_start = [%e eint body_end]
+              ; attribute_start = [%e eint attr.attr_loc.loc_start.pos_cnum]
               ; attribute_end = [%e eint attr.attr_loc.loc_end.pos_cnum]
               }]
       | _ -> invalid ~loc:attr.attr_loc "[@@expect.uncaught_exn] expects a string literal"
@@ -480,7 +487,7 @@ let expand_test ~loc ~item_attributes (vb : value_binding) : structure_item =
             , [%e Ast_builder.Default.eint ~loc l.loc_end.pos_cnum] )]
   in
   let uncaught_exn =
-    uncaught_exn_of_attributes ~loc ~body_end (vb.pvb_attributes @ item_attributes)
+    uncaught_exn_of_attributes ~loc (vb.pvb_attributes @ item_attributes)
   in
   let body, groups = transform_body vb.pvb_expr in
   let expectations = eexpectations ~loc groups in
@@ -503,6 +510,7 @@ let expand_test ~loc ~item_attributes (vb : value_binding) : structure_item =
         ~condition:[%e condition]
         ~expectations:[%e expectations]
         ~body_end:[%e Ast_builder.Default.eint ~loc body_end]
+        ~test_start:[%e Ast_builder.Default.eint ~loc loc.loc_start.pos_cnum]
         ~last_statement_start:[%e Ast_builder.Default.eint ~loc last_statement_start]
         ~open_tail:[%e open_tail]
         ~uncaught_exn:[%e uncaught_exn]

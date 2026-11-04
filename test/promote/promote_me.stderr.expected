@@ -1,3 +1,3 @@
 FAILED: test/promote/promote_me.ml:88 different outputs
   the [%expect] at line 92 saw different outputs
-ppx_devtools-expect: FAILED 1 / 29 tests
+ppx_devtools-expect: FAILED 1 / 35 tests
