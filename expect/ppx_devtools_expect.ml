@@ -27,8 +27,9 @@
     - [%expect {| ... |}] / [%expect] assertion points into
       [Ppx_devtools_expect_runtime.check ~index]. Consecutive assertion points are
       coalesced into a single group of variants checked against the output
-      captured since the previous group. The default ends its group: the
-      assertion points following a plain [%expect] form the next group.
+      captured since the previous group. The default is the last of its group:
+      the assertion points following a plain [%expect] form the next group, and
+      [\[@when\]] variants with no default cannot follow one.
     - [%expect {| ... |} \[@when COND\]] conditional variants. [COND] is a
       predicate in the {!Ppx_devtools_predicate.Predicate} grammar; it is reified
       into a runtime test against {!Ppx_devtools_expect_runtime.Axes}. Further axes
@@ -266,14 +267,26 @@ let transform_body (body : expression) : expression * variant list array =
       method private sequence e =
         let loc = e.pexp_loc in
         let stmts = flatten_seq e in
-        let rec go = function
+        (* [after_default]: the previous statement ended a group with its
+           default. *)
+        let rec go ~after_default = function
           | [] -> []
           | stmt :: rest -> (
               match classify ~in_sequence:true stmt with
               | Expect v ->
                   let run, rest = gather_run [] v rest in
-                  check ~loc:stmt.pexp_loc (alloc_group run) :: go rest
-              | Output | Other -> self#expression stmt :: go rest)
+                  let has_default = List.exists run ~f:(fun v -> v.is_default) in
+                  (* Variants right after a default, with no default of their
+                     own, were meant for the group of that default. *)
+                  if after_default && not has_default
+                  then
+                    invalid
+                      ~loc:stmt.pexp_loc
+                      "a [@when] variant must come before the default [%%expect] of its \
+                       group";
+                  check ~loc:stmt.pexp_loc (alloc_group run)
+                  :: go ~after_default:has_default rest
+              | Output | Other -> self#expression stmt :: go ~after_default:false rest)
         and gather_run acc v rest =
           (* The default comes last: the variants following it belong to the
              next group. *)
@@ -288,7 +301,7 @@ let transform_body (body : expression) : expression * variant list array =
                 | Expect v -> gather_run acc v rest'
                 | Output | Other -> List.rev acc, rest)
         in
-        build_seq ~loc (go stmts)
+        build_seq ~loc (go ~after_default:false stmts)
     end
   in
   let body = mapper#expression body in

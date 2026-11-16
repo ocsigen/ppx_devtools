@@ -1,0 +1,2 @@
+File "default_first.ml", line 4, characters 2-38:
+Error: a [@when] variant must come before the default [%expect] of its group
