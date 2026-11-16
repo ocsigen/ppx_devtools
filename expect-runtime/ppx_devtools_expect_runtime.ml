@@ -358,11 +358,18 @@ let check_groups r =
         | outputs ->
             (* Like ppx_expect, the test keeps failing until the outputs agree,
                even once the CR is promoted. *)
+            let line =
+              (* The variant that gets the CR. Without one, a default is
+                 inserted after the last variant. *)
+              match select_variant group with
+              | Some v -> v.line
+              | None -> group.(Array.length group - 1).line
+            in
             r.errors <-
               Printf.sprintf
                 "FAILED: %s\n  the [%%expect] at line %d saw different outputs\n"
                 r.description
-                group.(0).line
+                line
               :: r.errors;
             check_group r group ~multiple:true (cr_for_multiple_outputs outputs))
     r.expectations
