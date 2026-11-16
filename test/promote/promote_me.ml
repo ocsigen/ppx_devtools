@@ -176,6 +176,11 @@ let%expect_test "reached adjacent [%expect.unreachable]s" =
   [%expect.unreachable];
   [%expect.unreachable]
 
+let%expect_test "[@when] after the [%expect]" =
+  print_string "actual";
+  [%expect {| stale |}] [@when ocaml_version >= (4, 0, 0)];
+  [%expect {| default |}]
+
 (* The variant belongs to the group of the default following it. *)
 let%expect_test "[@when] variant after a default" =
   print_string "first";

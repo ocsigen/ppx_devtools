@@ -195,8 +195,14 @@ type point =
 (* [in_sequence]: [e] is a statement of a sequence, not a lone expression. *)
 let classify ~in_sequence (e : expression) : point =
   match e.pexp_desc with
-  | Pexp_extension ({ txt = "expect"; _ }, payload) ->
-      Expect (variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload)
+  | Pexp_extension ({ txt = "expect"; _ }, payload) -> (
+      let v = variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload in
+      (* The [@when] may also follow the node: [[%expect {| ... |}] [@when COND]]. *)
+      match when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[] with
+      | None -> Expect v
+      | Some (_, _, attr_loc) when not v.is_default ->
+          invalid ~loc:attr_loc "this [%%expect] already has a [@when]"
+      | Some _ as condition -> Expect (with_condition v condition))
   | Pexp_extension ({ txt = "expect.unreachable"; loc }, payload) -> (
       match payload with
       | PStr [] ->

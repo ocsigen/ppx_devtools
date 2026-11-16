@@ -176,12 +176,12 @@ let select_variant group =
       in
       find_default 0
 
-let report r correction message =
+let record r correction message =
   r.corrections <- correction :: r.corrections;
   r.reports <- message :: r.reports
 
 let mismatch r ~expected ~actual correction =
-  report r correction (Diff.make ~description:r.description ~expected ~actual)
+  record r correction (Diff.make ~description:r.description ~expected ~actual)
 
 (* Output that no [%expect] accounts for is expected to be empty. On a
    mismatch, a new [%expect] is inserted at [pos]. *)
@@ -233,7 +233,7 @@ let check_reached r group ~several actual =
       (* A reached [%expect.unreachable] becomes an [%expect], under the same
          condition. *)
       saw_different_outputs "[%expect.unreachable] at" v.line;
-      report
+      record
         r
         { Corrected.filename = r.filename
         ; payload_start = v.expect_start
@@ -287,7 +287,7 @@ let check_reached r group ~several actual =
 let check_unreached r group =
   match select_variant group with
   | Some v when v.is_default && not v.is_unreachable ->
-      report
+      record
         r
         { Corrected.filename = r.filename
         ; payload_start = v.expect_start
@@ -721,9 +721,9 @@ let exit () =
   | reports ->
       Printf.eprintf "\n%s\n" (String.make 70 '=');
       List.iter (fun s -> output_string stderr s) reports);
-  let unreadable, to_promote =
-    Corrected.write ~root:cfg.source_tree_root !all_corrections
-  in
+  let unreadable = Corrected.write ~root:cfg.source_tree_root !all_corrections in
+  (* Every correction changes its source. *)
+  let to_promote = !all_corrections <> [] in
   flush stderr;
   let failed =
     if not dune_mode then !mismatches else if to_promote then 0 else !failures
