@@ -136,15 +136,16 @@ let with_condition v = function
       }
 
 (* Parse the payload of an [%expect ...] node into a {!variant}. *)
-let variant_of_payload ~ext_loc ~in_sequence (payload : payload) : variant =
+let variant_of_payload ~ext_loc ~name_loc ~in_sequence (payload : payload) : variant =
   let line = ext_loc.loc_start.pos_lnum in
   let expect_start = ext_loc.loc_start.pos_cnum in
   let expect_end = ext_loc.loc_end.pos_cnum in
   match payload with
   | PStr [] ->
-      (* Bare [%expect]: no literal yet. Promotion will insert one just before
-         the closing [\]] of the extension. *)
-      let p = ext_loc.loc_end.pos_cnum - 1 in
+      (* Bare [%expect]: no literal yet. Promotion will insert one just after
+         the name of the extension. [ext_loc] may not end with its closing
+         [\]]: it covers the parentheses of [([%expect] [@when COND])]. *)
+      let p = name_loc.loc_end.pos_cnum in
       { is_default = true
       ; condition = None
       ; condition_span = None
@@ -194,24 +195,22 @@ type point =
 
 (* [in_sequence]: [e] is a statement of a sequence, not a lone expression. *)
 let classify ~in_sequence (e : expression) : point =
+  (* The variant of an [%expect] or [%expect.unreachable] node. The [@when] may
+     also follow the node: [[%expect {| ... |}] [@when COND]]. *)
+  let variant ~name_loc payload =
+    let v = variant_of_payload ~ext_loc:e.pexp_loc ~name_loc ~in_sequence payload in
+    match when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[] with
+    | None -> v
+    | Some (_, _, attr_loc) when not v.is_default ->
+        invalid ~loc:attr_loc "this [%%expect] already has a [@when]"
+    | Some _ as condition -> with_condition v condition
+  in
   match e.pexp_desc with
-  | Pexp_extension ({ txt = "expect"; _ }, payload) -> (
-      let v = variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload in
-      (* The [@when] may also follow the node: [[%expect {| ... |}] [@when COND]]. *)
-      match when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[] with
-      | None -> Expect v
-      | Some (_, _, attr_loc) when not v.is_default ->
-          invalid ~loc:attr_loc "this [%%expect] already has a [@when]"
-      | Some _ as condition -> Expect (with_condition v condition))
+  | Pexp_extension ({ txt = "expect"; loc }, payload) ->
+      Expect (variant ~name_loc:loc payload)
   | Pexp_extension ({ txt = "expect.unreachable"; loc }, payload) -> (
       match payload with
-      | PStr [] ->
-          (* [([%expect.unreachable] [@when COND])] is a conditional variant. *)
-          let v = variant_of_payload ~ext_loc:e.pexp_loc ~in_sequence payload in
-          Expect
-            (with_condition
-               { v with is_unreachable = true }
-               (when_condition ~expr_attrs:e.pexp_attributes ~eval_attrs:[]))
+      | PStr [] -> Expect { (variant ~name_loc:loc payload) with is_unreachable = true }
       | _ -> invalid ~loc "[%%expect.unreachable] does not take a payload")
   | Pexp_extension ({ txt = "expect.output"; loc }, payload) -> (
       match payload with

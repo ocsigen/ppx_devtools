@@ -181,6 +181,15 @@ let%expect_test "[@when] after the [%expect]" =
   [%expect {| stale |}] [@when ocaml_version >= (4, 0, 0)];
   [%expect {| default |}]
 
+[@@@ocamlformat "disable"]
+
+(* ocamlformat would drop the parentheses under test. *)
+let%expect_test "bare [%expect], parenthesized with its [@when]" =
+  print_string "actual";
+  ([%expect] [@when ocaml_version >= (4, 0, 0)]);
+  [%expect {| default |}]
+[@@@ocamlformat "enable"]
+
 (* The variant belongs to the group of the default following it. *)
 let%expect_test "[@when] variant after a default" =
   print_string "first";
