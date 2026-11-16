@@ -213,12 +213,26 @@ let cr_for_multiple_outputs outputs =
   in
   String.concat "\n" (cr :: List.concat (List.mapi (fun i o -> [ header i; o ]) outputs))
 
-(* [selected] is [select_variant group]. *)
-let check_group r group selected actual =
-  match selected with
+(* Check a group against the output it saw. With [~different], this is the CR
+   for the different outputs it saw: like ppx_expect, the test then keeps
+   failing until they agree, even once the CR is promoted. *)
+let check_reached r group ~different actual =
+  let different what line =
+    if different
+    then
+      r.errors <-
+        Printf.sprintf
+          "FAILED: %s\n  the %s line %d saw different outputs\n"
+          r.description
+          what
+          line
+        :: r.errors
+  in
+  match select_variant group with
   | Some v when v.is_unreachable ->
       (* A reached [%expect.unreachable] becomes an [%expect], under the same
          condition. *)
+      different "[%expect.unreachable] at" v.line;
       report
         r
         { Corrected.filename = r.filename
@@ -235,6 +249,7 @@ let check_group r group selected actual =
              v.line
          else Diff.make ~description:r.description ~expected:"" ~actual)
   | Some v ->
+      different "[%expect] at" v.line;
       if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
       then
         mismatch
@@ -253,6 +268,7 @@ let check_group r group selected actual =
          (e.g. [if c then [%expect ...] else ...]), the two are parenthesized
          into one. *)
       let last = group.(Array.length group - 1) in
+      different "[%expect] missing after" last.line;
       check_unexpected
         r
         ~pos:last.expect_end
@@ -262,6 +278,28 @@ let check_group r group selected actual =
            then Corrected.No_parens
            else Around { start = group.(0).expect_start })
         actual
+
+(* Check a group that was not reached. As in ppx_expect, an [%expect] that was
+   never reached becomes an [%expect.unreachable]. Only the default does, and
+   only when it is the active variant: a [@when] variant, unreachable or not,
+   may be the one for this environment while the default is reached in
+   others. *)
+let check_unreached r group =
+  match select_variant group with
+  | Some v when v.is_default && not v.is_unreachable ->
+      report
+        r
+        { Corrected.filename = r.filename
+        ; payload_start = v.expect_start
+        ; payload_end = v.expect_end
+        ; actual = ""
+        ; kind = Replace "[%expect.unreachable]"
+        }
+        (Printf.sprintf
+           "FAILED: %s\n  the [%%expect] at line %d was not reached\n"
+           r.description
+           v.line)
+  | Some _ | None -> ()
 
 (* Like ppx_expect, an exception escaping the test is a snapshot, recorded in a
    [[@@expect.uncaught_exn]] attribute together with the output printed after
@@ -323,60 +361,19 @@ let check ~index =
         && not (List.exists (String.equal actual) r.outputs.(index))
       then r.outputs.(index) <- actual :: r.outputs.(index)
 
-(* Check the outputs recorded by each assertion point once the test is over.
-   As in ppx_expect, an [%expect] that was never reached becomes an
-   [%expect.unreachable]. In a group, only the default variant does: the
-   [@when] variants keep their snapshots, as the code may be reached under
-   other axes. *)
+(* Once the test is over, check each group according to the distinct outputs
+   its assertion point recorded: none when it was not reached, several when it
+   ran more than once with different outputs. *)
 let check_groups r =
   Array.iteri
     (fun index group ->
       if Array.length group > 0
       then
-        let selected = select_variant group in
         match List.sort String.compare r.outputs.(index) with
-        | [] -> (
-            (* Only the default is marked unreachable, and only when it is the
-               active variant: a [@when] variant, unreachable or not, may be
-               the one for this environment while the default is reached in
-               others. *)
-            match selected with
-            | Some v when v.is_default && not v.is_unreachable ->
-                report
-                  r
-                  { Corrected.filename = r.filename
-                  ; payload_start = v.expect_start
-                  ; payload_end = v.expect_end
-                  ; actual = ""
-                  ; kind = Replace "[%expect.unreachable]"
-                  }
-                  (Printf.sprintf
-                     "FAILED: %s\n  the [%%expect] at line %d was not reached\n"
-                     r.description
-                     v.line)
-            | Some _ | None -> ())
-        | [ actual ] -> check_group r group selected actual
+        | [] -> check_unreached r group
+        | [ actual ] -> check_reached r group ~different:false actual
         | outputs ->
-            (* Like ppx_expect, the test keeps failing until the outputs agree,
-               even once the CR is promoted. The error is reported on what
-               gets the CR. *)
-            let where =
-              match selected with
-              | Some v when v.is_unreachable ->
-                  Printf.sprintf "[%%expect.unreachable] at line %d" v.line
-              | Some v -> Printf.sprintf "[%%expect] at line %d" v.line
-              | None ->
-                  Printf.sprintf
-                    "[%%expect] missing after line %d"
-                    group.(Array.length group - 1).line
-            in
-            r.errors <-
-              Printf.sprintf
-                "FAILED: %s\n  the %s saw different outputs\n"
-                r.description
-                where
-              :: r.errors;
-            check_group r group selected (cr_for_multiple_outputs outputs))
+            check_reached r group ~different:true (cr_for_multiple_outputs outputs))
     r.expectations
 
 let read_output () =
