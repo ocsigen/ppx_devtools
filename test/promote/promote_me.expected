@@ -332,4 +332,35 @@ let%expect_test "uncaught exception, no longer raised, after an attribute" =
 [@@ocaml.warning "-26"] (* kept *)
 [@@@ocamlformat "enable"]
 
+(* A test in a functor applied twice is registered twice: its corrections are
+   applied once. *)
+module In_functor (X : sig
+  val s : string
+end) =
+struct
+  let%expect_test "in a functor applied twice" =
+    print_string X.s;
+    [%expect {| actual |}];
+    print_string "trailing";
+    [%expect {| trailing |}]
+end
+
+module _ = In_functor (struct
+  let s = "actual"
+end)
+
+module _ = In_functor (struct
+  let s = "actual"
+end)
+
+(* The attribute of a sequence is kept: without it, this test does not
+   compile (warning 21, nonreturning statement). *)
+let%expect_test "attribute on a sequence" =
+  (try
+     (raise Exit;
+      print_string "unreachable")
+     [@warning "-21"]
+   with Exit -> print_string "actual");
+  [%expect {| actual |}]
+
 let () = Ppx_devtools_expect_runtime.exit ()

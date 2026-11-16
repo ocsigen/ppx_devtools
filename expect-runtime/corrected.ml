@@ -163,10 +163,12 @@ let write_file path data =
 let write ~root corrections =
   let unreadable = ref 0 in
   let tbl = Hashtbl.create 16 in
+  (* A test registered several times, in a functor applied more than once,
+     gives the same correction each time: apply it once. *)
   List.iter
     (fun c ->
       let l = try Hashtbl.find tbl c.filename with Not_found -> [] in
-      Hashtbl.replace tbl c.filename (c :: l))
+      if not (List.mem c l) then Hashtbl.replace tbl c.filename (c :: l))
     corrections;
   Hashtbl.iter
     (fun filename cs ->
