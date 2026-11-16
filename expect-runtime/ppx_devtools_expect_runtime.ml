@@ -600,10 +600,13 @@ let exit () =
       Stdlib.exit 0);
   (* In [-diff-cmd -] mode (always passed by dune) the runner just writes the
      [.corrected] files and lets dune diff them against the sources and drive
-     promotion: an expect mismatch is therefore NOT a runner failure, unless
-     promotion does not fix it ([r.errors]). Run standalone (no [-diff-cmd -]),
-     the runner prints the diffs itself and fails on any mismatch. An exception escaping a test is a mismatch too, against
-     its [[@@expect.uncaught_exn]] attribute. *)
+     promotion: an expect mismatch is therefore NOT a runner failure. Dune
+     only diffs when the runner succeeds, so an error that promotion does not
+     fix ([r.errors]) fails the runner only once there is nothing left to
+     promote; until then, the diffs fail the test. Run standalone (no
+     [-diff-cmd -]), the runner prints the diffs itself and fails on any
+     mismatch. An exception escaping a test is a mismatch too, against its
+     [[@@expect.uncaught_exn]] attribute. *)
   let dune_mode =
     match cfg.diff_cmd with
     | Some "-" -> true
@@ -714,9 +717,13 @@ let exit () =
   | reports ->
       Printf.eprintf "\n%s\n" (String.make 70 '=');
       List.iter (fun s -> output_string stderr s) reports);
-  let unreadable = Corrected.write ~root:cfg.source_tree_root !all_corrections in
+  let unreadable, to_promote =
+    Corrected.write ~root:cfg.source_tree_root !all_corrections
+  in
   flush stderr;
-  let failed = if dune_mode then !failures else !mismatches in
+  let failed =
+    if not dune_mode then !mismatches else if to_promote then 0 else !failures
+  in
   if failed > 0
   then Printf.eprintf "ppx_devtools-expect: FAILED %d / %d tests\n%!" failed !ran;
   if failed > 0 || unreadable > 0 then Stdlib.exit 2;

@@ -1,30 +1,29 @@
 ; Checks the [.corrected] file the runner writes for mismatching
 ; expectations, i.e. what [dune promote] would write back to the source.
 
-(executable
- (name promote_me)
- (modules promote_me)
+(executables
+ (names promote_me different_outputs)
+ (modules promote_me different_outputs)
  (preprocess
   (pps ppx_devtools-expect)))
 
-; The runner fails, even under dune, on an [%expect] that saw different
-; outputs, as promotion does not fix it.
+; The runner succeeds, even with an [%expect] that saw different outputs: dune
+; only diffs the [.corrected] files, and so allows promoting them, when it
+; does.
 
 (rule
  (targets promote_me.ml.corrected promote_me.stderr)
  (deps promote_me.ml)
  (action
-  (with-accepted-exit-codes
-   2
-   (with-stderr-to
-    promote_me.stderr
-    (run
-     %{exe:promote_me.exe}
-     inline-test-runner
-     -source-tree-root
-     %{workspace_root}
-     -diff-cmd
-     -)))))
+  (with-stderr-to
+   promote_me.stderr
+   (run
+    %{exe:promote_me.exe}
+    inline-test-runner
+    -source-tree-root
+    %{workspace_root}
+    -diff-cmd
+    -))))
 
 (rule
  (alias runtest)
@@ -53,3 +52,32 @@
      missing
      -diff-cmd
      -)))))
+
+; Once its CR is promoted, an [%expect] that saw different outputs has nothing
+; left to promote, and the runner fails until the outputs agree.
+
+(rule
+ (targets different_outputs.ml.corrected different_outputs.stderr)
+ (deps different_outputs.ml)
+ (action
+  (with-accepted-exit-codes
+   2
+   (with-stderr-to
+    different_outputs.stderr
+    (run
+     %{exe:different_outputs.exe}
+     inline-test-runner
+     -source-tree-root
+     %{workspace_root}
+     -diff-cmd
+     -)))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff different_outputs.ml different_outputs.ml.corrected)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff different_outputs.stderr.expected different_outputs.stderr)))

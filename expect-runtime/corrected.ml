@@ -136,10 +136,12 @@ let write_file path data =
    that root relative to the runner's cwd (dune's [-source-tree-root]). Both the
    source read and the [.corrected] write go through [root] so they land next to
    the in-build copy of the source that dune diffs for promotion. Returns the
-   number of sources that could not be read: their mismatches would otherwise
-   be lost. *)
+   number of sources that could not be read (their mismatches would otherwise
+   be lost), and whether a [.corrected] file differs from its source, i.e.
+   whether there is something to promote. *)
 let write ~root corrections =
   let unreadable = ref 0 in
+  let changed = ref false in
   let tbl = Hashtbl.create 16 in
   List.iter
     (fun c ->
@@ -242,6 +244,8 @@ let write ~root corrections =
                 pos := e))
             edits;
           Buffer.add_substring buf source !pos (String.length source - !pos);
-          write_file (path ^ ".corrected") (Buffer.contents buf))
+          let corrected = Buffer.contents buf in
+          if not (String.equal corrected source) then changed := true;
+          write_file (path ^ ".corrected") corrected)
     tbl;
-  !unreadable
+  !unreadable, !changed
