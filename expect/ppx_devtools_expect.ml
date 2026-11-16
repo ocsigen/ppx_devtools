@@ -231,9 +231,17 @@ let classify ~in_sequence (e : expression) : point =
       | _ -> invalid ~loc "[%%expect.output] does not take a payload")
   | _ -> Other
 
-let rec flatten_seq (e : expression) =
+(* The statements of a sequence. A nested sequence carrying attributes, as in
+   [a; ((b; c) [@attr])], is kept whole, as a statement, for them not to be
+   lost. *)
+let flatten_seq (e : expression) =
+  let rec tail (e : expression) =
+    match e.pexp_desc, e.pexp_attributes with
+    | Pexp_sequence (a, b), [] -> a :: tail b
+    | _ -> [ e ]
+  in
   match e.pexp_desc with
-  | Pexp_sequence (a, b) -> a :: flatten_seq b
+  | Pexp_sequence (a, b) -> a :: tail b
   | _ -> [ e ]
 
 let build_seq ~loc = function
@@ -322,7 +330,8 @@ let transform_body (body : expression) : expression * variant list array =
                 | Expect v -> gather_run acc v rest'
                 | Output | Other -> List.rev acc, rest)
         in
-        build_seq ~loc (go ~after_default:false stmts)
+        let seq = build_seq ~loc (go ~after_default:false stmts) in
+        { seq with pexp_attributes = seq.pexp_attributes @ e.pexp_attributes }
     end
   in
   let body = mapper#expression body in
