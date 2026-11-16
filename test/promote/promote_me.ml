@@ -156,4 +156,24 @@ let%expect_test "reached [@when] [%expect.unreachable]" =
   [%expect.unreachable] [@when ocaml_version >= (4, 0, 0)];
   [%expect {| default |}]
 
+let%expect_test "adjacent [%expect]s" =
+  print_string "first";
+  [%expect {| first |}];
+  [%expect {| second |}]
+
+let%expect_test "unreached adjacent [%expect]s" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect {| unreached |}];
+    [%expect {| unreached too |}]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "reached adjacent [%expect.unreachable]s" =
+  print_string "reached";
+  [%expect.unreachable];
+  [%expect.unreachable]
+
 let () = Ppx_devtools_expect_runtime.exit ()

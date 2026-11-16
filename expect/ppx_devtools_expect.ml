@@ -27,7 +27,8 @@
     - [%expect {| ... |}] / [%expect] assertion points into
       [Ppx_devtools_expect_runtime.check ~index]. Consecutive assertion points are
       coalesced into a single group of variants checked against the output
-      captured since the previous group.
+      captured since the previous group. A group has a single default: a second
+      plain [%expect] starts the next group.
     - [%expect {| ... |} \[@when COND\]] conditional variants. [COND] is a
       predicate in the {!Ppx_devtools_predicate.Predicate} grammar; it is reified
       into a runtime test against {!Ppx_devtools_expect_runtime.Axes}. Further axes
@@ -228,7 +229,7 @@ let build_seq ~loc = function
       go l
 
 (* Rewrite a test body, allocating a group per run of adjacent assertion points
-   and replacing each [%expect ...]/[%expect.output] with the matching runtime
+   with at most one default, and replacing each [%expect ...]/[%expect.output] with the matching runtime
    call. Returns the rewritten body and the groups in index order. *)
 let transform_body (body : expression) : expression * variant list array =
   let groups = ref [] in
@@ -275,8 +276,13 @@ let transform_body (body : expression) : expression * variant list array =
         and gather_run acc = function
           | stmt :: rest -> (
               match classify ~in_sequence:true stmt with
-              | Expect v -> gather_run (v :: acc) rest
-              | Output | Other -> List.rev acc, stmt :: rest)
+              | Expect v
+                when not (v.is_default && List.exists acc ~f:(fun v -> v.is_default)) ->
+                  gather_run (v :: acc) rest
+              | Expect _ | Output | Other ->
+                  (* A group has a single default: a second one starts the
+                     next group. *)
+                  List.rev acc, stmt :: rest)
           | [] -> List.rev acc, []
         in
         build_seq ~loc (go stmts)
