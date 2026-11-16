@@ -234,4 +234,8 @@ let%expect_test "different outputs, no variant applies" =
                |}])
     [ "a"; "b" ]
 
+let%expect_test "trailing output, after an attribute" =
+  print_string "trailing" [@ocaml.warning "-26"];
+  [%expect {| trailing |}]
+
 let () = Ppx_devtools_expect_runtime.exit ()

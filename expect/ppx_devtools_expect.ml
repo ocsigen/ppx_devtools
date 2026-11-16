@@ -376,28 +376,7 @@ let tags_of_attributes (attrs : attribute list) : string list =
    using the same predicate grammar as [%expect ... [@when]] (a runtime check,
    so it can mention backend/engine which [@@if] cannot). *)
 let when_of_attributes (attrs : attribute list) : expression option =
-  match
-    List.find_opt attrs ~f:(fun (a : attribute) -> String.equal a.attr_name.txt "when")
-  with
-  | None -> None
-  | Some attr ->
-      Attribute.mark_as_handled_manually attr;
-      let loc = attr.attr_loc in
-      let cond =
-        match attr.attr_payload with
-        | PStr [ { pstr_desc = Pstr_eval (e, _); _ } ] -> e
-        | _ -> invalid ~loc "[@when] expects a single predicate expression"
-      in
-      let t =
-        try Predicate.parse cond
-        with Predicate.Invalid loc -> invalid ~loc "invalid [@when] predicate"
-      in
-      Some
-        (try Predicate.reify ~resolve ~loc:cond.pexp_loc t
-         with Predicate.Invalid loc ->
-           invalid
-             ~loc
-             "[@when] predicate uses an unknown axis or is not meaningful at runtime")
+  Option.map (fun (e, _, _) -> e) (when_condition ~expr_attrs:attrs ~eval_attrs:[])
 
 (* dune passes the library name being preprocessed as the [library-name]
    ppxlib cookie; record it so each test knows which library it belongs to. *)
@@ -426,12 +405,13 @@ let rec open_tail (e : expression) : location option =
   | Pexp_ifthenelse (_, e, None) -> open_tail e
   | _ -> (
       (* [Pexp_let] has an extra argument with OxCaml's ppxlib, but
-         [Ast_pattern.pexp_let] has the same shape everywhere. *)
+         [Ast_pattern.pexp_let] has the same shape everywhere. It rejects
+         attributes. *)
       match
         Ast_pattern.parse_res
           Ast_pattern.(pexp_let __ __ __)
           e.pexp_loc
-          e
+          { e with pexp_attributes = [] }
           (fun _ _ body -> body)
       with
       | Ok body -> open_tail body
@@ -488,7 +468,13 @@ let expand_test ~loc ~item_attributes (vb : value_binding) : structure_item =
      so the [-verbose] location reads identically. *)
   let start_pos = pos.pos_cnum - pos.pos_bol in
   let end_pos = vb.pvb_loc.loc_end.pos_cnum - pos.pos_bol in
-  let body_end = vb.pvb_expr.pexp_loc.loc_end.pos_cnum in
+  (* The location of an expression does not cover its attributes. *)
+  let body_end =
+    List.fold_left
+      vb.pvb_expr.pexp_attributes
+      ~init:vb.pvb_expr.pexp_loc.loc_end.pos_cnum
+      ~f:(fun pos (a : attribute) -> max pos a.attr_loc.loc_end.pos_cnum)
+  in
   let last_statement_start =
     (List.hd (List.rev (flatten_seq vb.pvb_expr))).pexp_loc.loc_start.pos_cnum
   in

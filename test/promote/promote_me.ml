@@ -197,4 +197,7 @@ let%expect_test "different outputs, no variant applies" =
       [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])])
     [ "a"; "b" ]
 
+let%expect_test "trailing output, after an attribute" =
+  print_string "trailing" [@ocaml.warning "-26"]
+
 let () = Ppx_devtools_expect_runtime.exit ()

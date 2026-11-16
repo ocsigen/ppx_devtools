@@ -77,8 +77,8 @@
  (action
   (diff different_outputs.stderr.expected different_outputs.stderr)))
 
-; Run standalone, the runner says why the test fails: the diff alone shows no
-; change, as the CR is already in the source.
+; Run standalone, the runner says the same: there is no diff to print, as the
+; CR is already in the source.
 
 (rule
  (deps
@@ -99,5 +99,5 @@
  (alias runtest)
  (action
   (diff
-   different_outputs.standalone.stderr.expected
+   different_outputs.stderr.expected
    different_outputs.standalone.stderr)))

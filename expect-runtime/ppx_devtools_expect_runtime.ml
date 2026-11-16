@@ -213,12 +213,12 @@ let cr_for_multiple_outputs outputs =
   in
   String.concat "\n" (cr :: List.concat (List.mapi (fun i o -> [ header i; o ]) outputs))
 
-(* Check a group against the output it saw. With [~different], this is the CR
+(* Check a group against the output it saw. With [~several], this is the CR
    for the different outputs it saw: like ppx_expect, the test then keeps
    failing until they agree, even once the CR is promoted. *)
-let check_reached r group ~different actual =
-  let different what line =
-    if different
+let check_reached r group ~several actual =
+  let saw_different_outputs what line =
+    if several
     then
       r.errors <-
         Printf.sprintf
@@ -232,7 +232,7 @@ let check_reached r group ~different actual =
   | Some v when v.is_unreachable ->
       (* A reached [%expect.unreachable] becomes an [%expect], under the same
          condition. *)
-      different "[%expect.unreachable] at" v.line;
+      saw_different_outputs "[%expect.unreachable] at" v.line;
       report
         r
         { Corrected.filename = r.filename
@@ -249,7 +249,7 @@ let check_reached r group ~different actual =
              v.line
          else Diff.make ~description:r.description ~expected:"" ~actual)
   | Some v ->
-      different "[%expect] at" v.line;
+      saw_different_outputs "[%expect] at" v.line;
       if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
       then
         mismatch
@@ -268,7 +268,7 @@ let check_reached r group ~different actual =
          (e.g. [if c then [%expect ...] else ...]), the two are parenthesized
          into one. *)
       let last = group.(Array.length group - 1) in
-      different "[%expect] missing after" last.line;
+      saw_different_outputs "[%expect] missing after" last.line;
       check_unexpected
         r
         ~pos:last.expect_end
@@ -371,9 +371,8 @@ let check_groups r =
       then
         match List.sort String.compare r.outputs.(index) with
         | [] -> check_unreached r group
-        | [ actual ] -> check_reached r group ~different:false actual
-        | outputs ->
-            check_reached r group ~different:true (cr_for_multiple_outputs outputs))
+        | [ actual ] -> check_reached r group ~several:false actual
+        | outputs -> check_reached r group ~several:true (cr_for_multiple_outputs outputs))
     r.expectations
 
 let read_output () =
