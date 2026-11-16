@@ -176,4 +176,25 @@ let%expect_test "reached adjacent [%expect.unreachable]s" =
   [%expect.unreachable];
   [%expect.unreachable]
 
+(* The variant belongs to the group of the default following it. *)
+let%expect_test "[@when] variant after a default" =
+  print_string "first";
+  [%expect {| first |}];
+  [%expect ({| stale |} [@when ocaml_version >= (4, 0, 0)])];
+  [%expect {| default |}]
+
+let%expect_test "different outputs, [%expect.unreachable]" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect.unreachable])
+    [ "a"; "b" ]
+
+let%expect_test "different outputs, no variant applies" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])])
+    [ "a"; "b" ]
+
 let () = Ppx_devtools_expect_runtime.exit ()

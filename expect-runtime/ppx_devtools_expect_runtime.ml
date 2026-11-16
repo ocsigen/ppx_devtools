@@ -213,8 +213,9 @@ let cr_for_multiple_outputs outputs =
   in
   String.concat "\n" (cr :: List.concat (List.mapi (fun i o -> [ header i; o ]) outputs))
 
-let check_group r group actual =
-  match select_variant group with
+(* [selected] is [select_variant group]. *)
+let check_group r group selected actual =
+  match selected with
   | Some v when v.is_unreachable ->
       (* A reached [%expect.unreachable] becomes an [%expect], under the same
          condition. *)
@@ -332,13 +333,14 @@ let check_groups r =
     (fun index group ->
       if Array.length group > 0
       then
+        let selected = select_variant group in
         match List.sort String.compare r.outputs.(index) with
         | [] -> (
             (* Only the default is marked unreachable, and only when it is the
                active variant: a [@when] variant, unreachable or not, may be
                the one for this environment while the default is reached in
                others. *)
-            match select_variant group with
+            match selected with
             | Some v when v.is_default && not v.is_unreachable ->
                 report
                   r
@@ -353,24 +355,28 @@ let check_groups r =
                      r.description
                      v.line)
             | Some _ | None -> ())
-        | [ actual ] -> check_group r group actual
+        | [ actual ] -> check_group r group selected actual
         | outputs ->
             (* Like ppx_expect, the test keeps failing until the outputs agree,
-               even once the CR is promoted. *)
-            let line =
-              (* The variant that gets the CR. Without one, a default is
-                 inserted after the last variant. *)
-              match select_variant group with
-              | Some v -> v.line
-              | None -> group.(Array.length group - 1).line
+               even once the CR is promoted. The error is reported on what
+               gets the CR. *)
+            let where =
+              match selected with
+              | Some v when v.is_unreachable ->
+                  Printf.sprintf "[%%expect.unreachable] at line %d" v.line
+              | Some v -> Printf.sprintf "[%%expect] at line %d" v.line
+              | None ->
+                  Printf.sprintf
+                    "[%%expect] missing after line %d"
+                    group.(Array.length group - 1).line
             in
             r.errors <-
               Printf.sprintf
-                "FAILED: %s\n  the [%%expect] at line %d saw different outputs\n"
+                "FAILED: %s\n  the %s saw different outputs\n"
                 r.description
-                line
+                where
               :: r.errors;
-            check_group r group (cr_for_multiple_outputs outputs))
+            check_group r group selected (cr_for_multiple_outputs outputs))
     r.expectations
 
 let read_output () =

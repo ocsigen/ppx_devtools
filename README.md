@@ -106,8 +106,8 @@ is not, promotion adds an `[%expect]` at the end of the test. As in
 ### Conditional snapshots and tests
 
 A `[@when COND]` attribute on an expectation makes it apply only when `COND`
-holds at runtime. The plain `[%expect]` of the group is the default; without
-one, the output is expected to be empty, and promotion adds it:
+holds at runtime. The plain `[%expect]` of the group is the default, and comes
+last; without one, the output is expected to be empty, and promotion adds it:
 
 ```ocaml
 let%expect_test "float32 marshalling" =

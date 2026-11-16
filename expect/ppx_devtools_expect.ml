@@ -27,8 +27,8 @@
     - [%expect {| ... |}] / [%expect] assertion points into
       [Ppx_devtools_expect_runtime.check ~index]. Consecutive assertion points are
       coalesced into a single group of variants checked against the output
-      captured since the previous group. A group has a single default: a second
-      plain [%expect] starts the next group.
+      captured since the previous group. The default ends its group: the
+      assertion points following a plain [%expect] form the next group.
     - [%expect {| ... |} \[@when COND\]] conditional variants. [COND] is a
       predicate in the {!Ppx_devtools_predicate.Predicate} grammar; it is reified
       into a runtime test against {!Ppx_devtools_expect_runtime.Axes}. Further axes
@@ -229,8 +229,9 @@ let build_seq ~loc = function
       go l
 
 (* Rewrite a test body, allocating a group per run of adjacent assertion points
-   with at most one default, and replacing each [%expect ...]/[%expect.output] with the matching runtime
-   call. Returns the rewritten body and the groups in index order. *)
+   ending with the default, if any, and replacing each
+   [%expect ...]/[%expect.output] with the matching runtime call. Returns the
+   rewritten body and the groups in index order. *)
 let transform_body (body : expression) : expression * variant list array =
   let groups = ref [] in
   let count = ref 0 in
@@ -270,20 +271,22 @@ let transform_body (body : expression) : expression * variant list array =
           | stmt :: rest -> (
               match classify ~in_sequence:true stmt with
               | Expect v ->
-                  let run, rest = gather_run [ v ] rest in
+                  let run, rest = gather_run [] v rest in
                   check ~loc:stmt.pexp_loc (alloc_group run) :: go rest
               | Output | Other -> self#expression stmt :: go rest)
-        and gather_run acc = function
-          | stmt :: rest -> (
-              match classify ~in_sequence:true stmt with
-              | Expect v
-                when not (v.is_default && List.exists acc ~f:(fun v -> v.is_default)) ->
-                  gather_run (v :: acc) rest
-              | Expect _ | Output | Other ->
-                  (* A group has a single default: a second one starts the
-                     next group. *)
-                  List.rev acc, stmt :: rest)
-          | [] -> List.rev acc, []
+        and gather_run acc v rest =
+          (* The default comes last: the variants following it belong to the
+             next group. *)
+          let acc = v :: acc in
+          if v.is_default
+          then List.rev acc, rest
+          else
+            match rest with
+            | [] -> List.rev acc, []
+            | stmt :: rest' -> (
+                match classify ~in_sequence:true stmt with
+                | Expect v -> gather_run acc v rest'
+                | Output | Other -> List.rev acc, rest)
         in
         build_seq ~loc (go stmts)
     end
