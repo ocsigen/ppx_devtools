@@ -1,6 +1,10 @@
 FAILED: test/promote/promote_me.ml:88 different outputs
   the [%expect] at line 92 saw different outputs
-FAILED: test/promote/promote_me.ml:200 different outputs, [%expect.unreachable]
-  the [%expect.unreachable] at line 204 saw different outputs
-FAILED: test/promote/promote_me.ml:207 different outputs, no variant applies
-  the [%expect] missing after line 211 saw different outputs
+FAILED: test/promote/promote_me.ml:202 different outputs, twice
+  the [%expect] at line 206 saw different outputs
+FAILED: test/promote/promote_me.ml:202 different outputs, twice
+  the [%expect] at line 208 saw different outputs
+FAILED: test/promote/promote_me.ml:218 different outputs, [%expect.unreachable]
+  the [%expect.unreachable] at line 222 saw different outputs
+FAILED: test/promote/promote_me.ml:225 different outputs, no variant applies
+  the [%expect] missing after line 229 saw different outputs

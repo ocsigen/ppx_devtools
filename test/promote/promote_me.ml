@@ -190,6 +190,24 @@ let%expect_test "bare [%expect], parenthesized with its [@when]" =
   [%expect {| default |}]
 [@@@ocamlformat "enable"]
 
+let%expect_test "quoted extension" =
+  print_string "actual";
+  {%expect| stale |}
+
+let%expect_test "reached [%expect.unreachable], attribute before its [@when]" =
+  print_string "reached";
+  [%expect.unreachable] [@ocaml.warning "-26"] [@when ocaml_version >= (4, 0, 0)];
+  [%expect {| default |}]
+
+let%expect_test "different outputs, twice" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect {| a |}];
+      print_string s;
+      [%expect {| a |}])
+    [ "a"; "b" ]
+
 (* The variant belongs to the group of the default following it. *)
 let%expect_test "[@when] variant after a default" =
   print_string "first";

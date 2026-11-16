@@ -65,7 +65,6 @@ let tag_dropped = function
 
 type variant =
   { condition : unit -> bool
-  ; condition_span : (int * int) option
   ; is_default : bool
   ; expected : string
   ; line : int
@@ -233,21 +232,23 @@ let check_reached r group ~several actual =
       (* A reached [%expect.unreachable] becomes an [%expect], under the same
          condition. *)
       saw_different_outputs "[%expect.unreachable] at" v.line;
+      let description =
+        Printf.sprintf
+          "%s\n  the [%%expect.unreachable] at line %d was reached"
+          r.description
+          v.line
+      in
       record
         r
         { Corrected.filename = r.filename
-        ; payload_start = v.expect_start
-        ; payload_end = v.expect_end
+        ; payload_start = v.payload_start
+        ; payload_end = v.payload_end
         ; actual
-        ; kind = Expect_node { condition = v.condition_span }
+        ; kind = Reached
         }
         (if String.equal (Text.normalize actual) ""
-         then
-           Printf.sprintf
-             "FAILED: %s\n  the [%%expect.unreachable] at line %d was reached\n"
-             r.description
-             v.line
-         else Diff.make ~description:r.description ~expected:"" ~actual)
+         then Printf.sprintf "FAILED: %s\n" description
+         else Diff.make ~description ~expected:"" ~actual)
   | Some v ->
       saw_different_outputs "[%expect] at" v.line;
       if not (String.equal (Text.normalize actual) (Text.normalize v.expected))

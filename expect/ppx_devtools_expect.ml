@@ -50,7 +50,6 @@ let runtime = "Ppx_devtools_expect_runtime"
 type variant =
   { is_default : bool
   ; condition : expression option (* reified [@when] predicate, [bool]-valued *)
-  ; condition_span : (int * int) option (* source of the [@when] predicate *)
   ; expected : string
   ; line : int
   ; expect_start : int
@@ -120,18 +119,15 @@ let when_condition ~expr_attrs ~eval_attrs =
       in
       Some (e, cond.pexp_loc, attr.attr_loc)
 
-let span (loc : location) = loc.loc_start.pos_cnum, loc.loc_end.pos_cnum
-
 (* Make [v] conditional on the [@when] found by [when_condition], if any. The
    node is extended over the attribute, which may follow it:
    [[%expect.unreachable] [@when COND]]. *)
 let with_condition v = function
   | None -> v
-  | Some (e, cond_loc, (attr_loc : location)) ->
+  | Some (e, _, (attr_loc : location)) ->
       { v with
         is_default = false
       ; condition = Some e
-      ; condition_span = Some (span cond_loc)
       ; expect_end = max v.expect_end attr_loc.loc_end.pos_cnum
       }
 
@@ -148,7 +144,6 @@ let variant_of_payload ~ext_loc ~name_loc ~in_sequence (payload : payload) : var
       let p = name_loc.loc_end.pos_cnum in
       { is_default = true
       ; condition = None
-      ; condition_span = None
       ; expected = ""
       ; line
       ; expect_start
@@ -171,16 +166,27 @@ let variant_of_payload ~ext_loc ~name_loc ~in_sequence (payload : payload) : var
             | None -> 1
             | Some d -> String.length d + 2
           in
+          (* In [{%expect| ... |}], the literal has no delimiters of its own,
+             and its location is that of the whole node. Promotion rewrites
+             the node as an [[%expect {| ... |}]]. *)
+          let quoted_extension =
+            lit.pexp_loc.loc_start.pos_cnum < name_loc.loc_start.pos_cnum
+          in
           with_condition
             { is_default = true
             ; condition = None
-            ; condition_span = None
             ; expected = s
             ; line
             ; expect_start
             ; expect_end
-            ; payload_start = str_loc.loc_start.pos_cnum - delim_len
-            ; payload_end = str_loc.loc_end.pos_cnum + delim_len
+            ; payload_start =
+                (if quoted_extension
+                 then lit.pexp_loc.loc_start.pos_cnum
+                 else str_loc.loc_start.pos_cnum - delim_len)
+            ; payload_end =
+                (if quoted_extension
+                 then lit.pexp_loc.loc_end.pos_cnum
+                 else str_loc.loc_end.pos_cnum + delim_len)
             ; in_sequence
             ; is_unreachable = false
             }
@@ -210,7 +216,14 @@ let classify ~in_sequence (e : expression) : point =
       Expect (variant ~name_loc:loc payload)
   | Pexp_extension ({ txt = "expect.unreachable"; loc }, payload) -> (
       match payload with
-      | PStr [] -> Expect { (variant ~name_loc:loc payload) with is_unreachable = true }
+      | PStr [] ->
+          (* Promotion rewrites the name of the node, when reached. *)
+          Expect
+            { (variant ~name_loc:loc payload) with
+              is_unreachable = true
+            ; payload_start = loc.loc_start.pos_cnum
+            ; payload_end = loc.loc_end.pos_cnum
+            }
       | _ -> invalid ~loc "[%%expect.unreachable] does not take a payload")
   | Pexp_extension ({ txt = "expect.output"; loc }, payload) -> (
       match payload with
@@ -289,9 +302,12 @@ let transform_body (body : expression) : expression * variant list array =
                       ~loc:stmt.pexp_loc
                       "a [@when] variant must come before the default [%%expect] of its \
                        group";
-                  check ~loc:stmt.pexp_loc (alloc_group run)
-                  :: go ~after_default:has_default rest
-              | Output | Other -> self#expression stmt :: go ~after_default:false rest)
+                  (* Groups are numbered in source order. *)
+                  let check = check ~loc:stmt.pexp_loc (alloc_group run) in
+                  check :: go ~after_default:has_default rest
+              | Output | Other ->
+                  let stmt = self#expression stmt in
+                  stmt :: go ~after_default:false rest)
         and gather_run acc v rest =
           (* The default comes last: the variants following it belong to the
              next group. *)
@@ -324,15 +340,6 @@ let evariant ~loc (v : variant) : expression =
   in
   [%expr
     { Ppx_devtools_expect_runtime.condition = [%e condition]
-    ; condition_span =
-        [%e
-          match v.condition_span with
-          | None -> [%expr None]
-          | Some (s, e) ->
-              [%expr
-                Some
-                  ( [%e Ast_builder.Default.eint ~loc s]
-                  , [%e Ast_builder.Default.eint ~loc e] )]]
     ; is_default = [%e Ast_builder.Default.ebool ~loc v.is_default]
     ; expected = [%e estring ~loc v.expected]
     ; line = [%e Ast_builder.Default.eint ~loc v.line]
