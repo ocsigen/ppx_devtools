@@ -1,0 +1,15 @@
+# The other tests need ppx_devtools-expect, which depends on this package.
+build: [
+  ["dune" "subst"] {dev}
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@test/optcomp-errors/runtest" {with-test}
+    "@doc" {with-doc}
+  ]
+]
