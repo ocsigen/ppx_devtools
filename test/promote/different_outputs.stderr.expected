@@ -1,0 +1,5 @@
+FAILED: test/promote/different_outputs.ml:5 different outputs, promoted
+  the [%expect] at line 9 saw different outputs
+FAILED: test/promote/different_outputs.ml:19 different outputs, promoted, in a group
+  the [%expect] at line 24 saw different outputs
+ppx_devtools-expect: FAILED 2 / 2 tests

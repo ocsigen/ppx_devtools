@@ -61,6 +61,7 @@ type variant =
   ; payload_start : int (* byte offset of the literal token in the source *)
   ; payload_end : int (* byte offset just past the literal token *)
   ; in_sequence : bool (* a statement of a sequence, not a lone expression *)
+  ; is_unreachable : bool (* [%expect.unreachable] *)
   }
 (** One environment-specific variant of an [%expect] assertion point. *)
 

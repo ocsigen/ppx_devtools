@@ -25,6 +25,12 @@ type kind =
      [payload_start, payload_end), or insert a new attribute there when the
      span is empty. *)
   | Uncaught_exn
+  (* Replace [payload_start, payload_end), the name of a reached
+     [%expect.unreachable], with that of an [%expect] holding [actual]. What
+     surrounds the name, such as a [@when], is kept. *)
+  | Reached
+  (* Replace [payload_start, payload_end) with the given text. *)
+  | Replace of string
   (* Delete [payload_start, payload_end). *)
   | Delete
   (* Insert a new [%expect] at [payload_start] (= [payload_end]), indented
@@ -155,9 +161,19 @@ let write ~root corrections =
               (fun c ->
                 match c.kind with
                 | Literal ->
+                    (* The span of a [{%expect| ... |}] is the whole node,
+                       rewritten as an [[%expect {| ... |}]]. *)
+                    let quoted_extension =
+                      c.payload_start + 1 < String.length source
+                      && Char.equal source.[c.payload_start] '{'
+                      && Char.equal source.[c.payload_start + 1] '%'
+                    in
+                    let opening, closing =
+                      if quoted_extension then "[%expect ", "]" else "", ""
+                    in
                     let literal =
                       render_literal
-                        ~column:(column_of source c.payload_start)
+                        ~column:(column_of source c.payload_start + String.length opening)
                         ~actual:c.actual
                     in
                     (* A bare [%expect] has no literal to replace (the span is
@@ -167,7 +183,7 @@ let write ~root corrections =
                     let literal =
                       if c.payload_start = c.payload_end then " " ^ literal else literal
                     in
-                    [ c.payload_start, c.payload_end, literal ]
+                    [ c.payload_start, c.payload_end, opening ^ literal ^ closing ]
                 | Uncaught_exn ->
                     (* Laid out like ppx_expect does. *)
                     let literal = render_literal ~column:2 ~actual:c.actual in
@@ -177,6 +193,15 @@ let write ~root corrections =
                       else literal
                     in
                     [ c.payload_start, c.payload_end, literal ]
+                | Reached ->
+                    let opening = "expect " in
+                    let literal =
+                      render_literal
+                        ~column:(column_of source c.payload_start + String.length opening)
+                        ~actual:c.actual
+                    in
+                    [ c.payload_start, c.payload_end, opening ^ literal ]
+                | Replace s -> [ c.payload_start, c.payload_end, s ]
                 | Delete -> [ c.payload_start, c.payload_end, "" ]
                 | New_expect { indent_pos; parens } -> (
                     let indent = indentation_of source indent_pos in

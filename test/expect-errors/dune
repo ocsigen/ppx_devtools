@@ -1,0 +1,28 @@
+; The default [%expect] of a group comes last: a [@when] variant following it
+; is an error, rather than being silently made a group of its own.
+
+(executable
+ (name pp)
+ (modules pp)
+ (libraries ppx_devtools-expect ppxlib))
+
+(rule
+ (targets default_first.output)
+ (deps default_first.ml)
+ (action
+  (with-accepted-exit-codes
+   1
+   (setenv
+    OCAML_ERROR_STYLE
+    short
+    (setenv
+     OCAML_COLOR
+     never
+     (with-outputs-to
+      %{targets}
+      (run ./pp.exe -impl default_first.ml -o %{null})))))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff default_first.expected default_first.output)))

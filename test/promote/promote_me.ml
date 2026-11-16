@@ -1,4 +1,4 @@
-(* Every expectation below is wrong on purpose. *)
+(* Every expectation below is wrong on purpose, except where noted. *)
 
 let%expect_test "guarded variant, parenthesized" =
   print_string "actual";
@@ -84,5 +84,152 @@ let%expect_test "uncaught exception, no longer raised" =
   print_string "trailing";
   print_newline ()
 [@@expect.uncaught_exn {| Stdlib.Exit |}]
+
+let%expect_test "different outputs" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect {| a |}])
+    [ "b"; "a"; "b" ]
+
+let%expect_test "same outputs" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect {| a |}])
+    [ "a"; "a" ]
+
+let%expect_test "reached [%expect.unreachable]" =
+  print_string "reached";
+  [%expect.unreachable]
+
+let%expect_test "reached [%expect.unreachable], no output" = [%expect.unreachable]
+
+let%expect_test "unreached [%expect.unreachable]" =
+  if false then [%expect.unreachable];
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "unreached [%expect]" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect {| unreached |}]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "unreached [%expect], after an exception" =
+  print_string "reached";
+  [%expect {| reached |}];
+  if true then raise Exit;
+  [%expect {| unreached |}]
+[@@expect.uncaught_exn {| Stdlib.Exit |}]
+
+let%expect_test "unreached [@when] variant" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect ({| unreached |} [@when ocaml_version < (4, 0, 0)])];
+    [%expect {| default |}]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "unreached group, [@when] variant active" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect.unreachable] [@when ocaml_version >= (4, 0, 0)];
+    [%expect {| reached elsewhere |}]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "unreached [@when] variants, no default" =
+  if false then [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])];
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "reached [@when] [%expect.unreachable]" =
+  print_string "reached";
+  [%expect.unreachable] [@when ocaml_version >= (4, 0, 0)];
+  [%expect {| default |}]
+
+let%expect_test "adjacent [%expect]s" =
+  print_string "first";
+  [%expect {| first |}];
+  [%expect {| second |}]
+
+let%expect_test "unreached adjacent [%expect]s" =
+  if false
+  then begin
+    print_string "unreached";
+    [%expect {| unreached |}];
+    [%expect {| unreached too |}]
+  end;
+  print_string "reached";
+  [%expect {| reached |}]
+
+let%expect_test "reached adjacent [%expect.unreachable]s" =
+  print_string "reached";
+  [%expect.unreachable];
+  [%expect.unreachable]
+
+let%expect_test "[@when] after the [%expect]" =
+  print_string "actual";
+  [%expect {| stale |}] [@when ocaml_version >= (4, 0, 0)];
+  [%expect {| default |}]
+
+[@@@ocamlformat "disable"]
+
+(* ocamlformat would drop the parentheses under test. *)
+let%expect_test "bare [%expect], parenthesized with its [@when]" =
+  print_string "actual";
+  ([%expect] [@when ocaml_version >= (4, 0, 0)]);
+  [%expect {| default |}]
+[@@@ocamlformat "enable"]
+
+let%expect_test "quoted extension" =
+  print_string "actual";
+  {%expect| stale |}
+
+let%expect_test "reached [%expect.unreachable], attribute before its [@when]" =
+  print_string "reached";
+  [%expect.unreachable] [@ocaml.warning "-26"] [@when ocaml_version >= (4, 0, 0)];
+  [%expect {| default |}]
+
+let%expect_test "different outputs, twice" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect {| a |}];
+      print_string s;
+      [%expect {| a |}])
+    [ "a"; "b" ]
+
+(* The variant belongs to the group of the default following it. *)
+let%expect_test "[@when] variant after a default" =
+  print_string "first";
+  [%expect {| first |}];
+  [%expect ({| stale |} [@when ocaml_version >= (4, 0, 0)])];
+  [%expect {| default |}]
+
+let%expect_test "different outputs, [%expect.unreachable]" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect.unreachable])
+    [ "a"; "b" ]
+
+let%expect_test "different outputs, no variant applies" =
+  List.iter
+    (fun s ->
+      print_string s;
+      [%expect ({| other |} [@when ocaml_version < (4, 0, 0)])])
+    [ "a"; "b" ]
+
+let%expect_test "trailing output, after an attribute" =
+  print_string "trailing" [@ocaml.warning "-26"]
 
 let () = Ppx_devtools_expect_runtime.exit ()
