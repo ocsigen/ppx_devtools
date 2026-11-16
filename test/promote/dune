@@ -54,10 +54,10 @@
      -)))))
 
 ; Once its CR is promoted, an [%expect] that saw different outputs has nothing
-; left to promote, and the runner fails until the outputs agree.
+; left to promote, and the runner fails until the outputs agree. It would
+; succeed if there was a correction to promote.
 
 (rule
- (targets different_outputs.ml.corrected different_outputs.stderr)
  (deps different_outputs.ml)
  (action
   (with-accepted-exit-codes
@@ -75,9 +75,29 @@
 (rule
  (alias runtest)
  (action
-  (diff different_outputs.ml different_outputs.ml.corrected)))
+  (diff different_outputs.stderr.expected different_outputs.stderr)))
+
+; Run standalone, the runner says why the test fails: the diff alone shows no
+; change, as the CR is already in the source.
+
+(rule
+ (deps
+  different_outputs.ml
+  (sandbox always))
+ (action
+  (with-accepted-exit-codes
+   2
+   (with-stderr-to
+    different_outputs.standalone.stderr
+    (run
+     %{exe:different_outputs.exe}
+     inline-test-runner
+     -source-tree-root
+     %{workspace_root})))))
 
 (rule
  (alias runtest)
  (action
-  (diff different_outputs.stderr.expected different_outputs.stderr)))
+  (diff
+   different_outputs.standalone.stderr.expected
+   different_outputs.standalone.stderr)))

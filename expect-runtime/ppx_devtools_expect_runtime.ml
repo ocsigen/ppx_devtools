@@ -148,7 +148,7 @@ type run =
   ; mutable corrections : Corrected.correction list
   ; mutable reports : string list
   ; mutable errors : string list
-        (* failures that promotion does not fix, reported even under dune *)
+        (* failures that promotion does not fix, reported in both modes *)
   }
 
 let current : run option ref = ref None
@@ -213,7 +213,7 @@ let cr_for_multiple_outputs outputs =
   in
   String.concat "\n" (cr :: List.concat (List.mapi (fun i o -> [ header i; o ]) outputs))
 
-let check_group r group ~multiple actual =
+let check_group r group actual =
   match select_variant group with
   | Some v when v.is_unreachable ->
       (* A reached [%expect.unreachable] becomes an [%expect], under the same
@@ -234,8 +234,7 @@ let check_group r group ~multiple actual =
              v.line
          else Diff.make ~description:r.description ~expected:"" ~actual)
   | Some v ->
-      if
-        multiple || not (String.equal (Text.normalize actual) (Text.normalize v.expected))
+      if not (String.equal (Text.normalize actual) (Text.normalize v.expected))
       then
         mismatch
           r
@@ -354,7 +353,7 @@ let check_groups r =
                      r.description
                      v.line)
             | Some _ | None -> ())
-        | [ actual ] -> check_group r group ~multiple:false actual
+        | [ actual ] -> check_group r group actual
         | outputs ->
             (* Like ppx_expect, the test keeps failing until the outputs agree,
                even once the CR is promoted. *)
@@ -371,7 +370,7 @@ let check_groups r =
                 r.description
                 line
               :: r.errors;
-            check_group r group ~multiple:true (cr_for_multiple_outputs outputs))
+            check_group r group (cr_for_multiple_outputs outputs))
     r.expectations
 
 let read_output () =
@@ -706,17 +705,13 @@ let exit () =
         current := None;
         Capture.stop cap;
         if cfg.verbose then Printf.printf " (%.3f sec)\n%!" elapsed;
-        (match r.corrections with
-        | [] -> ()
-        | corrections ->
-            incr mismatches;
-            all_corrections := List.rev_append corrections !all_corrections;
-            if not dune_mode then List.iter report (List.rev r.reports));
-        match r.errors with
-        | [] -> ()
-        | errors ->
-            incr failures;
-            if dune_mode then List.iter report (List.rev errors)
+        (* Reported in both modes: standalone, the diff alone does not explain
+           the failure once the CR is in the source. *)
+        if r.errors <> [] then incr failures;
+        if r.errors <> [] || r.corrections <> [] then incr mismatches;
+        List.iter report (List.rev r.errors);
+        all_corrections := List.rev_append r.corrections !all_corrections;
+        if not dune_mode then List.iter report (List.rev r.reports)
       end)
     (List.rev !tests);
   (match List.rev !delayed with
